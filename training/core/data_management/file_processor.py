@@ -7,38 +7,63 @@ from ..models.sample import Sample
 from ..database import SessionLocal
 
 class FileProcessor:
-    def process_file(self, file, dataset_id: int) -> Dict[str, Any]:
-        """处理上传的文件"""
+    def process_file(self, file_path_or_obj, dataset_id: int) -> Dict[str, Any]:
+        """处理上传的文件
+
+        支持两种输入:
+          - 本地文件路径 (str/Path): 桌面应用 QML 传入
+          - 文件对象 (有 .filename 和 .file 属性): Web API 传入
+        """
         db = SessionLocal()
         try:
             # 创建存储目录
             dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
             if not dataset:
                 return {"status": "error", "message": "数据集不存在"}
-            
+
             storage_path = dataset.storage_path
             os.makedirs(storage_path, exist_ok=True)
-            
-            # 保存文件
-            file_path = os.path.join(storage_path, file.filename)
-            with open(file_path, "wb") as f:
-                shutil.copyfileobj(file.file, f)
+
+            # 处理两种输入模式
+            if isinstance(file_path_or_obj, str):
+                # 桌面应用: 传入本地文件路径
+                source_path = file_path_or_obj
+                filename = os.path.basename(source_path)
+                dest_path = os.path.join(storage_path, filename)
+                shutil.copy2(source_path, dest_path)
+                file_type, _ = mimetypes.guess_type(source_path) or ("application/octet-stream", None)
+            elif hasattr(file_path_or_obj, 'filename'):
+                # Web API: 上传的文件对象
+                filename = file_path_or_obj.filename
+                dest_path = os.path.join(storage_path, filename)
+                with open(dest_path, "wb") as f:
+                    source = getattr(file_path_or_obj, 'file', file_path_or_obj)
+                    if hasattr(source, 'read'):
+                        shutil.copyfileobj(source, f)
+                    else:
+                        f.write(source)
+                file_type = getattr(file_path_or_obj, 'content_type', 'application/octet-stream')
+            else:
+                return {"status": "error", "message": "不支持的文件输入类型"}
+
+            if not file_type:
+                file_type = "application/octet-stream"
             
             # 提取元数据
-            metadata = self.extract_metadata(file_path, file.content_type)
-            
+            metadata = self.extract_metadata(dest_path, file_type)
+
             # 验证文件
-            if not self.validate_file(file_path, file.content_type):
-                os.remove(file_path)
+            if not self.validate_file(dest_path, file_type):
+                os.remove(dest_path)
                 return {"status": "error", "message": "文件验证失败"}
-            
+
             # 创建样本记录
             sample = Sample(
                 dataset_id=dataset_id,
-                name=file.filename,
-                path=file_path,
-                size=os.path.getsize(file_path),
-                type=file.content_type.split("/")[0],
+                name=filename,
+                path=dest_path,
+                size=os.path.getsize(dest_path),
+                type=file_type.split("/")[0],
                 sample_metadata=metadata
             )
             db.add(sample)

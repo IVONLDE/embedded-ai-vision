@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: MIT */
 /*
  * RKNN1 NPU Inference Engine for RK3399Pro
  *
@@ -54,7 +54,7 @@ Rknn1Engine::Rknn1Engine(const char *model_path, int cpu_id)
     if (ret != 0) {
         std::cerr << "[RKNN1] Failed to load model: " << model_path
                   << std::endl;
-        exit(-1);
+        throw std::runtime_error("Failed to load RKNN model");
     }
 }
 
@@ -83,17 +83,30 @@ int Rknn1Engine::load_model(const char *model_path)
     }
 
     fseek(fp, 0, SEEK_END);
-    int model_len = ftell(fp);
-    void *model_data = malloc(model_len);
-    fseek(fp, 0, SEEK_SET);
-
-    if (model_len != fread(model_data, 1, model_len, fp)) {
-        fprintf(stderr, "[RKNN1] fread %s fail!\n", model_path);
-        free(model_data);
+    long model_len = ftell(fp);
+    if (model_len <= 0) {
+        fprintf(stderr, "[RKNN1] Invalid model file size: %ld\n", model_len);
         fclose(fp);
         return -1;
     }
+
+    void *model_data = malloc(model_len);
+    if (!model_data) {
+        fprintf(stderr, "[RKNN1] malloc failed for %ld bytes\n", model_len);
+        fclose(fp);
+        return -1;
+    }
+
+    fseek(fp, 0, SEEK_SET);
+    size_t read_len = fread(model_data, 1, model_len, fp);
     fclose(fp);
+
+    if (read_len != (size_t)model_len) {
+        fprintf(stderr, "[RKNN1] fread incomplete: got %zu/%ld\n",
+                read_len, model_len);
+        free(model_data);
+        return -1;
+    }
 
     /* 如果已有模型加载, 先释放旧模型 */
     if (_ctx) {
@@ -163,8 +176,9 @@ int Rknn1Engine::load_model(const char *model_path)
  * 流程:
  *   1. 加载新模型到临时 context
  *   2. 验证新模型输入/输出兼容性
- *   3. 原子替换 _ctx (加锁保护)
- *   4. 释放旧 context
+ *   3. 查询新模型输出属性
+ *   4. 原子替换 _ctx + _output_attrs
+ *   5. 释放旧 context
  *
  * 注意: 调用时需确保没有正在进行的推理!
  */
@@ -183,11 +197,30 @@ int Rknn1Engine::hot_reload_model(const char *new_model_path)
     }
 
     fseek(fp, 0, SEEK_END);
-    int model_len = ftell(fp);
+    long model_len = ftell(fp);
+    if (model_len <= 0) {
+        fprintf(stderr, "[RKNN1] Invalid model file size: %ld\n", model_len);
+        fclose(fp);
+        return -1;
+    }
+
     void *model_data = malloc(model_len);
+    if (!model_data) {
+        fprintf(stderr, "[RKNN1] malloc failed for %ld bytes\n", model_len);
+        fclose(fp);
+        return -1;
+    }
+
     fseek(fp, 0, SEEK_SET);
-    fread(model_data, 1, model_len, fp);
+    size_t read_len = fread(model_data, 1, model_len, fp);
     fclose(fp);
+
+    if (read_len != (size_t)model_len) {
+        fprintf(stderr, "[RKNN1] fread incomplete: got %zu/%ld\n",
+                read_len, model_len);
+        free(model_data);
+        return -1;
+    }
 
     /* 初始化新 context */
     ret = rknn_init(&new_ctx, model_data, model_len,
@@ -226,13 +259,29 @@ int Rknn1Engine::hot_reload_model(const char *new_model_path)
         return -1;
     }
 
+    /* 查询新模型输出属性 (修复: hot_reload 后旧 output_attrs 可能不兼容) */
+    rknn_tensor_attr new_output_attrs[3];
+    memset(new_output_attrs, 0, sizeof(new_output_attrs));
+    int actual_n_output = (new_ctx ? 3 : _n_output);
+    for (int i = 0; i < actual_n_output; i++) {
+        new_output_attrs[i].index = i;
+        ret = rknn_query(new_ctx, RKNN_QUERY_OUTPUT_ATTR,
+                         &new_output_attrs[i], sizeof(rknn_tensor_attr));
+        if (ret < 0) {
+            fprintf(stderr, "[RKNN1] hot-reload query output %d fail!\n", i);
+            rknn_destroy(new_ctx);
+            return -1;
+        }
+    }
+
     /* 原子替换 */
     rknn_context old_ctx = _ctx;
     _ctx = new_ctx;
     _model_path = new_model_path;
 
-    /* 更新属性 */
+    /* 更新输入/输出属性 */
     memcpy(&_input_attrs[0], &new_input_attrs, sizeof(rknn_tensor_attr));
+    memcpy(_output_attrs, new_output_attrs, sizeof(new_output_attrs));
 
     /* 释放旧 context */
     rknn_destroy(old_ctx);
@@ -253,7 +302,8 @@ int Rknn1Engine::hot_reload_model(const char *new_model_path)
  *   1. rknn_inputs_set  — 设置输入 (拷贝模式)
  *   2. rknn_run          — 触发 NPU 推理
  *   3. rknn_outputs_get  — 获取输出
- *   4. rknn_outputs_release — 释放输出
+ *   4. 复制输出到本地缓存 (防止悬空指针)
+ *   5. rknn_outputs_release — 释放输出
  */
 int Rknn1Engine::inference(unsigned char *input_data)
 {

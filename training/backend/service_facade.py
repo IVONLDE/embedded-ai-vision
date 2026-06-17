@@ -99,4 +99,6 @@ class BackendServiceFacade:
             training_service=training_service,
             algorithm_service=algorithm_service,
             settings_service=settings_service,
+            export_service=export_service,
+            edge_service=edge_service,
         )

@@ -73,7 +73,13 @@ class ExportService:
 
         try:
             # 调用 RKNN-Toolkit1 导出脚本
-            from training.scripts.export_to_rknn1 import (
+            import sys
+            scripts_dir = os.path.normpath(
+                os.path.join(os.path.dirname(__file__), "..", "..", "scripts")
+            )
+            if scripts_dir not in sys.path:
+                sys.path.insert(0, scripts_dir)
+            from export_to_rknn1 import (
                 export_onnx_yolov5, export_onnx_osnet, export_rknn
             )
 

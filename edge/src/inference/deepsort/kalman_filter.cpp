@@ -1,6 +1,14 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * Kalman Filter Implementation for SORT
+ *
+ * 状态空间: [x, y, a, h, vx, vy, va, vh]^T (8维列向量)
+ * 观测:     [x, y, a, h] (4维)
+ *
+ * 预测: x' = F * x,  P' = F * P * F^T + Q
+ * 更新: K = P' * H^T * (H * P' * H^T + R)^(-1)
+ *       x = x' + K * (z - H * x')
+ *       P = (I - K * H) * P'
  */
 
 #include "tracker.h"
@@ -10,7 +18,8 @@ KalmanFilter::KalmanFilter()
     : _std_weight_position(1.0f / 20.0f)
     , _std_weight_velocity(1.0f / 160.0f)
 {
-    /* 状态转移矩阵 (8×8): x' = F * x */
+    /* 状态转移矩阵 (8×8): x' = F * x
+     * x = x + vx, y = y + vy, a = a + va, h = h + vh */
     _motion_mat = Eigen::Matrix<float, 8, 8>::Identity();
     _motion_mat(0, 4) = 1.0f;
     _motion_mat(1, 5) = 1.0f;
@@ -25,6 +34,7 @@ KalmanFilter::KalmanFilter()
     _update_mat(3, 3) = 1.0f;
 }
 
+/* 初始化: 位置 = 观测值, 速度 = 0 */
 KAL_MEAN KalmanFilter::initiate(float cx, float cy, float aspect, float h)
 {
     KAL_MEAN mean = KAL_MEAN::Zero();
@@ -35,12 +45,13 @@ KAL_MEAN KalmanFilter::initiate(float cx, float cy, float aspect, float h)
     return mean;
 }
 
+/* 卡尔曼预测: x = F*x, P = F*P*F^T + Q */
 void KalmanFilter::predict(KAL_MEAN &mean, KAL_COVA &covariance)
 {
-    float std_pos = _std_weight_position * mean(3);    /* std = w * h */
+    float std_pos = _std_weight_position * mean(3);
     float std_vel = _std_weight_velocity * mean(3);
 
-    /* 过程噪声 Q */
+    /* 过程噪声 Q (8×8, 对角矩阵) */
     _motion_cov = Eigen::Matrix<float, 8, 8>::Identity();
     _motion_cov(0, 0) = std_pos * std_pos;
     _motion_cov(1, 1) = std_pos * std_pos;
@@ -51,17 +62,18 @@ void KalmanFilter::predict(KAL_MEAN &mean, KAL_COVA &covariance)
     _motion_cov(6, 6) = 1e-5f;
     _motion_cov(7, 7) = std_vel * std_vel;
 
-    mean = _motion_mat * mean;
+    mean = _motion_mat * mean;  /* 8×8 * 8×1 = 8×1 ✅ */
     covariance = _motion_mat * covariance * _motion_mat.transpose() + _motion_cov;
 }
 
+/* 卡尔曼更新: K = P*H^T/(H*P*H^T+R), x = x + K*(z-H*x), P = (I-K*H)*P */
 void KalmanFilter::update(KAL_MEAN &mean, KAL_COVA &covariance,
                           float cx, float cy, float aspect, float h)
 {
     Eigen::Matrix<float, 4, 1> measurement;
     measurement << cx, cy, aspect, h;
 
-    /* 观测噪声 R */
+    /* 观测噪声 R (4×4) */
     float std_pos = _std_weight_position * mean(3);
     _update_cov = Eigen::Matrix<float, 4, 4>::Identity();
     _update_cov(0, 0) = std_pos * std_pos;
@@ -69,14 +81,14 @@ void KalmanFilter::update(KAL_MEAN &mean, KAL_COVA &covariance,
     _update_cov(2, 2) = 1e-2f;
     _update_cov(3, 3) = std_pos * std_pos;
 
-    /* 卡尔曼增益 K = P * H^T * (H * P * H^T + R)^(-1) */
     Eigen::Matrix<float, 4, 8> H = _update_mat;
-    Eigen::Matrix<float, 4, 4> S = H * covariance * H.transpose() + _update_cov;
-    Eigen::Matrix<float, 8, 4> K = covariance * H.transpose() * S.inverse();
+    Eigen::Matrix<float, 8, 4> PHt = covariance * H.transpose();   /* 8×4 */
+    Eigen::Matrix<float, 4, 4> S = H * PHt + _update_cov;          /* 4×4 */
+    Eigen::Matrix<float, 8, 4> K = PHt * S.inverse();               /* 8×4 */
 
-    /* 更新 */
-    Eigen::Matrix<float, 4, 1> y = measurement - H * mean;
-    mean = mean + K * y;
+    /* 更新: x = x + K * (z - H*x) */
+    Eigen::Matrix<float, 4, 1> y = measurement - H * mean;          /* 4×1 */
+    mean = mean + K * y;                                            /* 8×1 */
 
     Eigen::Matrix<float, 8, 8> I = Eigen::Matrix<float, 8, 8>::Identity();
     covariance = (I - K * H) * covariance;
@@ -132,13 +144,16 @@ void Track::mark_missed()
         state = Deleted;
 }
 
+/* to_tlwh — 返回 (x, y, w, h) 格式的检测框 */
 DetectBox Track::to_tlwh() const
 {
     DetectBox box;
-    box.x1 = _mean(0) - _mean(2) * _mean(3) / 2.0f;
-    box.y1 = _mean(1) - _mean(3) / 2.0f;
-    box.x2 = _mean(0) + _mean(2) * _mean(3) / 2.0f;
-    box.y2 = _mean(1) + _mean(3) / 2.0f;
+    float w = _mean(2) * _mean(3);
+    float h = _mean(3);
+    box.x1 = _mean(0) - w / 2.0f;
+    box.y1 = _mean(1) - h / 2.0f;
+    box.x2 = box.x1 + w;
+    box.y2 = box.y1 + h;
     box.trackID = track_id;
     box.classID = cls;
     box.confidence = conf;
@@ -147,8 +162,9 @@ DetectBox Track::to_tlwh() const
 
 void Track::get_bbox(float &x, float &y, float &w, float &h) const
 {
-    x = _mean(0) - _mean(2) * _mean(3) / 2.0f;
+    float bw = _mean(2) * _mean(3);
+    x = _mean(0) - bw / 2.0f;
     y = _mean(1) - _mean(3) / 2.0f;
-    w = _mean(2) * _mean(3);
+    w = bw;
     h = _mean(3);
 }

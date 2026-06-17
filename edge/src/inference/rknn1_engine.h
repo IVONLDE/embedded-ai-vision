@@ -13,6 +13,7 @@
 #include <queue>
 #include <string>
 #include <vector>
+#include <stdexcept>
 
 class Rknn1Engine {
 public:
