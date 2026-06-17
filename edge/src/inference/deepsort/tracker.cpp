@@ -332,7 +332,7 @@ std::vector<DetectBox> Tracker::get_active_tracks() const
         if (!track.is_confirmed() || track.time_since_update > 1)
             continue;
 
-        DetractBox box;
+        DetectBox box;
         track.get_bbox(box.x1, box.y1, box.x2, box.y2);
         box.x2 += box.x1;  /* tlwh → tlbr */
         box.y2 += box.y1;
