@@ -1,0 +1,98 @@
+# Edge AI Camera — Pipeline Configuration
+# 版本: 1.0
+# 平台: RK3399Pro (RKNN-Toolkit1)
+
+config_version: "1.0"
+device_id: "rk3399pro-edge-001"
+active_scene: "vehicle"
+
+# ── 输入源 ────────────────────────────────────────────────
+input:
+  type: "v4l2_camera"
+  v4l2_device: "/dev/video0"
+  v4l2_width: 1920
+  v4l2_height: 1080
+  v4l2_fps: 30
+  v4l2_format: "NV12"
+
+# ── 推理 ──────────────────────────────────────────────────
+inference:
+  model_path: "/opt/edge-ai/models/yolov5n.rknn"
+  labels_path: "/opt/edge-ai/models/labels.txt"
+  det_interval: 1
+  conf_threshold: 0.3
+  nms_threshold: 0.45
+  cpu_id: 4
+
+# ── 跟踪 ──────────────────────────────────────────────────
+tracking:
+  enabled: true
+  algorithm: "SORT"
+  max_age: 30
+  n_init: 2
+  max_iou_distance: 0.7
+  cpu_id: 5
+
+# ── 输出 ──────────────────────────────────────────────────
+output:
+  save_video: false
+  video_path: "/data/results.mp4"
+  enable_rtsp: false
+  rtsp_port: 8554
+  rtsp_mount: "/edge_camera"
+  enable_display: false
+
+# ── MQTT ──────────────────────────────────────────────────
+mqtt:
+  enabled: true
+  broker_host: "192.168.1.100"
+  broker_port: 1883
+  client_id: "rk3399pro-edge-001"
+  topic_detections: "edge/rk3399pro-001/detections"
+  topic_health: "edge/rk3399pro-001/health"
+  topic_command: "edge/rk3399pro-001/command"
+  keepalive: 60
+  qos: 1
+
+# ── gRPC ──────────────────────────────────────────────────
+grpc:
+  enabled: true
+  listen_address: "0.0.0.0:50051"
+  unix_socket: "/tmp/edge-ai-grpc.sock"
+
+# ── 系统 ──────────────────────────────────────────────────
+system:
+  cpu_read: 1
+  cpu_inference: 4
+  cpu_tracking: 5
+  cpu_output: 0
+  queue_max_size: 16
+  ring_buffer_frames: 8
+  log_path: "/var/log/edge-ai/"
+  log_rotation_days: 7
+
+# ── 多场景配置 ────────────────────────────────────────────
+scenes:
+  - name: "face"
+    model_path: "/opt/edge-ai/models/face_detection.rknn"
+    labels_path: "/opt/edge-ai/models/face_labels.txt"
+    conf_threshold: 0.5
+    tracking_enabled: true
+
+  - name: "body"
+    model_path: "/opt/edge-ai/models/person_detection.rknn"
+    labels_path: "/opt/edge-ai/models/person_labels.txt"
+    conf_threshold: 0.3
+    tracking_enabled: true
+
+  - name: "vehicle"
+    model_path: "/opt/edge-ai/models/yolov5n.rknn"
+    labels_path: "/opt/edge-ai/models/labels.txt"
+    conf_threshold: 0.3
+    tracking_enabled: true
+
+  - name: "defect"
+    model_path: "/opt/edge-ai/models/defect_detection.rknn"
+    labels_path: "/opt/edge-ai/models/defect_labels.txt"
+    conf_threshold: 0.2
+    tracking_enabled: false

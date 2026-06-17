@@ -1,0 +1,74 @@
+[Unit]
+Description=Edge AI Camera — Embedded Inference Service
+Documentation=https://github.com/IVONLDE/embedded-ai-vision
+After=network.target rknn-server.service mosquitto.service
+Wants=network.target rknn-server.service mosquitto.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/edge-ai-camera --config /opt/edge-ai/config/pipeline.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStop=/bin/kill -SIGTERM $MAINPID
+
+# 工作目录
+WorkingDirectory=/opt/edge-ai
+RuntimeDirectory=edge-ai
+RuntimeDirectoryMode=0755
+StateDirectory=edge-ai
+StateDirectoryMode=0755
+
+# 环境变量
+Environment="LD_LIBRARY_PATH=/opt/edge-ai/lib:/usr/lib/aarch64-linux-gnu"
+Environment="RKNN_LOG_LEVEL=1"
+
+# CPU 亲和性 (A72 大核给推理, A53 小核给采集/上报)
+CPUAffinity=0 1 4 5
+AllowedCPUs=0 1 4 5
+
+# 资源限制
+MemoryMax=2G
+MemoryHigh=1.5G
+TasksMax=16
+LimitNOFILE=65536
+LimitNPROC=64
+
+# 安全加固
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/edge-ai /var/lib/edge-ai /tmp
+ReadOnlyPaths=/usr /lib /etc
+PrivateTmp=yes
+PrivateDevices=no
+DeviceAllow=/dev/video0 rw
+DeviceAllow=/dev/rknpu rw
+DeviceAllow=/dev/ttyS4 rw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+# 崩溃自动重启
+Restart=on-failure
+RestartSec=5s
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+# 看门狗 (应用需定期调用 sd_notify("WATCHDOG=1"))
+WatchdogSec=30s
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=edge-ai-camera
+
+# 优雅关机超时
+TimeoutStopSec=30s
+TimeoutStartSec=60s
+
+[Install]
+WantedBy=multi-user.target
