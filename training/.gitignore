@@ -1,0 +1,41 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+.Python
+.venv/
+venv/
+env/
+ENV/
+
+.idea/
+.vscode/
+
+*.db
+*.sqlite
+*.sqlite3
+
+.pytest_cache/
+.pytest_run_tmp/
+.pytest_tmp_*/
+.mypy_cache/
+.ruff_cache/
+
+dist/
+build/
+*.egg-info/
+
+*.log
+logs/
+
+# temp/test output directories
+.tmp/
+.tmp_*/
+tmp_backend_review*/
+
+# Claude/AI local settings
+.claude/
+.cursor/
+
+# user data (datasets/images)
+data/
