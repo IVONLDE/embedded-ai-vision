@@ -1,0 +1,44 @@
+# Build outputs
+build/
+cmake-build-*/
+*.o
+*.ko
+*.mod.c
+*.mod
+*.order
+*.symvers
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Model files (large binaries)
+*.rknn
+*.pt
+*.onnx
+*.pth
+
+# Video data
+*.mp4
+*.avi
+*.mov
+
+# Buildroot output
+output/
+
+# Logs
+*.log
+logs/
