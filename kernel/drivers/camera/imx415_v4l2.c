@@ -523,7 +523,8 @@ static int imx415_identify(struct imx415 *imx415)
  *   5. 创建 V4L2 controls
  *   6. 注册 media pad
  */
-static int imx415_probe(struct i2c_client *client)
+static int imx415_probe(struct i2c_client *client,
+                     const struct i2c_device_id *id)
 {
     struct device *dev = &client->dev;
     struct imx415 *imx415;
@@ -702,7 +703,7 @@ static struct i2c_driver imx415_i2c_driver = {
         .of_match_table = imx415_of_match,
         .owner = THIS_MODULE,
     },
-    .probe_new = imx415_probe,
+    .probe = imx415_probe,
     .remove = imx415_remove,
 };
 

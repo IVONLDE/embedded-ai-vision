@@ -1,0 +1,5 @@
+# /etc/inittab — Edge AI Camera init 配置
+::sysinit:/etc/init.d/rcS
+::respawn:/sbin/getty -L ttyS2 1500000 vt100
+::shutdown:/etc/init.d/rcK
+::shutdown:/bin/umount -a -r

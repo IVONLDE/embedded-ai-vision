@@ -132,7 +132,7 @@
 
     gpio-illuminator {
         compatible = "gpio-control";
-        illuminator-gpios = <&gpio3 RK_PC1 GPIO_ACTIVE_HIGH>;
+        illuminator-gpios = <&gpio3 RK_PC2 GPIO_ACTIVE_HIGH>;
         label = "ir-illuminator";
         default-state = "off";
     };

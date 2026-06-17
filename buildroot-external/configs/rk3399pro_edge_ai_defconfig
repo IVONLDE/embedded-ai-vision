@@ -1,0 +1,135 @@
+# Edge AI Camera — Buildroot Default Configuration
+#
+# 用法:
+#   cd buildroot
+#   make BR2_EXTERNAL=/path/to/embedded-ai-vision/buildroot-external rk3399pro_edge_ai_defconfig
+#   make -j$(nproc)
+#
+# 产出:
+#   output/images/
+#     sdcard.img        — SD卡镜像 (可直接dd烧写到SD卡)
+#     rootfs.tar        — rootfs压缩包
+#     Image             — Linux内核镜像
+#     rk3399pro-edge-ai-camera.dtb  — 设备树二进制
+
+# ── 目标平台 ──────────────────────────────────────────────
+BR2_aarch64=y
+BR2_ARCH="aarch64"
+BR2_ARM_CPU_HAS_NEON=y
+BR2_ARM_CPU_HAS_VFPV4=y
+
+# ── 交叉编译工具链 ────────────────────────────────────────
+# 使用外部预编译工具链 (Linaro ARM GCC 10.3)
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_LINARO_AARCH64=y
+BR2_TOOLCHAIN_EXTERNAL_GCC_10=y
+BR2_TOOLCHAIN_EXTERNAL_HEADERS_4_19=y
+BR2_TOOLCHAIN_EXTERNAL_CXX=y
+
+# ── 系统配置 ──────────────────────────────────────────────
+BR2_TARGET_GENERIC_HOSTNAME="rk3399pro-edge-ai"
+BR2_TARGET_GENERIC_ISSUE="Edge AI Camera System"
+BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
+BR2_ROOTFS_DEVICE_TABLE="system/device_table.txt"
+BR2_ROOTFS_STATIC_DEVICE_TABLE="system/device_table_dev.txt"
+
+# Init 系统: systemd
+BR2_INIT_SYSTEMD=y
+BR2_PACKAGE_SYSTEMD=y
+BR2_PACKAGE_SYSTEMD_NETWORKD=y
+BR2_PACKAGE_SYSTEMD_RESOLVED=y
+
+# ── Linux 内核 ────────────────────────────────────────────
+# 使用 Rockchip BSP 内核源码 (外部指定)
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_CUSTOM_GIT=y
+BR2_LINUX_KERNEL_CUSTOM_REPO_URL="https://github.com/rockchip-linux/kernel.git"
+BR2_LINUX_KERNEL_CUSTOM_REPO_VERSION="develop-4.19"
+BR2_LINUX_KERNEL_DEFCONFIG="rk3399pro_linux"
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL)/board/rk3399pro-custom/linux.fragment"
+BR2_LINUX_KERNEL_DTS_SUPPORT=y
+BR2_LINUX_KERNEL_INTREE_DTS_NAME="rockchip/rk3399pro-edge-ai-camera"
+BR2_LINUX_KERNEL_INSTALL_TARGET=y
+BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
+
+# ── U-Boot ────────────────────────────────────────────────
+BR2_TARGET_UBOOT=y
+BR2_TARGET_UBOOT_BUILD_SYSTEM_KCONFIG=y
+BR2_TARGET_UBOOT_CUSTOM_GIT=y
+BR2_TARGET_UBOOT_CUSTOM_REPO_URL="https://github.com/rockchip-linux/u-boot.git"
+BR2_TARGET_UBOOT_CUSTOM_REPO_VERSION="next-dev"
+BR2_TARGET_UBOOT_BOARD_DEFCONFIG="rk3399pro"
+BR2_TARGET_UBOOT_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL)/board/rk3399pro-custom/uboot.fragment"
+BR2_TARGET_UBOOT_NEEDS_DTC=y
+BR2_TARGET_UBOOT_NEEDS_PYTHON3=y
+BR2_TARGET_UBOOT_FORMAT_CUSTOM=y
+BR2_TARGET_UBOOT_FORMAT_CUSTOM_NAME="u-boot.itb"
+BR2_TARGET_UBOOT_SPL=y
+BR2_TARGET_UBOOT_SPL_NAME="spl/u-boot-spl.bin"
+
+# ── ARM Trusted Firmware ──────────────────────────────────
+BR2_TARGET_ARM_TRUSTED_FIRMWARE=y
+BR2_TARGET_ARM_TRUSTED_FIRMWARE_CUSTOM_GIT=y
+BR2_TARGET_ARM_TRUSTED_FIRMWARE_CUSTOM_REPO_URL="https://github.com/rockchip-linux/rkbin.git"
+BR2_TARGET_ARM_TRUSTED_FIRMWARE_PLATFORM="rk3399pro"
+
+# ── 自定义软件包 ──────────────────────────────────────────
+BR2_PACKAGE_RKNN_DRIVER=y
+BR2_PACKAGE_EDGE_AI_APP=y
+BR2_PACKAGE_CAMERA_SENSOR=y
+
+# ── 必需依赖 ──────────────────────────────────────────────
+BR2_PACKAGE_OPENCV4=y
+BR2_PACKAGE_OPENCV4_LIB_IMGPROC=y
+BR2_PACKAGE_OPENCV4_LIB_VIDEOIO=y
+BR2_PACKAGE_OPENCV4_LIB_DNN=y
+BR2_PACKAGE_EIGEN=y
+BR2_PACKAGE_GSTREAMER1=y
+BR2_PACKAGE_GST1_PLUGINS_BASE=y
+BR2_PACKAGE_GST1_PLUGINS_GOOD=y
+BR2_PACKAGE_GST1_PLUGINS_BAD=y
+BR2_PACKAGE_GST1_PLUGINS_UGLY=y
+BR2_PACKAGE_GST1_RTSP_SERVER=y
+BR2_PACKAGE_MOSQUITTO=y
+BR2_PACKAGE_GRPC=y
+BR2_PACKAGE_PROTOBUF=y
+BR2_PACKAGE_YAML_CPP=y
+BR2_PACKAGE_SQLITE=y
+BR2_PACKAGE_LIBCURL=y
+BR2_PACKAGE_OPENSSL=y
+
+# ── 网络工具 ──────────────────────────────────────────────
+BR2_PACKAGE_ETHTOOL=y
+BR2_PACKAGE_IPROUTE2=y
+BR2_PACKAGE_IPTABLES=y
+BR2_PACKAGE_DROPBEAR=y  # SSH server (轻量)
+
+# ── 调试工具 (开发阶段) ───────────────────────────────────
+BR2_PACKAGE_STRACE=y
+BR2_PACKAGE_PROCPS_NG=y
+BR2_PACKAGE_TOP=y
+BR2_PACKAGE_HTOP=y
+BR2_PACKAGE_IOSTAT=y
+
+# ── 文件系统 ──────────────────────────────────────────────
+# rootfs: ext4 (eMMC分区)
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_4=y
+BR2_TARGET_ROOTFS_EXT2_LABEL="rootfs"
+BR2_TARGET_ROOTFS_EXT2_SIZE="512M"
+
+# 数据分区: ext4 (SD卡/eMMC剩余空间)
+BR2_TARGET_ROOTFS_EXT2=y
+
+# ── SD 卡镜像生成 ─────────────────────────────────────────
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_PACKAGE_HOST_GENIMAGE=y
+BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL)/board/rk3399pro-custom/post-image.sh"
+BR2_ROOTFS_POST_SCRIPT_ARGS=""
+
+# ── 自定义 overlay (开机服务/配置文件) ────────────────────
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL)/board/rk3399pro-custom/overlay"
+
+# ── 输出压缩格式 ──────────────────────────────────────────
+BR2_TARGET_ROOTFS_TAR=y
+BR2_TARGET_ROOTFS_TAR_GZ=y

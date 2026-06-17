@@ -1,0 +1,2 @@
+# U-Boot configuration fragment for RK3399Pro Edge AI
+CONFIG_DEFAULT_DEVICE_TREE="rk3399pro-edge-ai-camera"

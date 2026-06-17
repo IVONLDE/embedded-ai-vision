@@ -1,0 +1,9 @@
+# Buildroot External Tree — Top-level Kconfig
+
+menu "Edge AI Camera System"
+
+source "$BR2_EXTERNAL_EMBEDDED_AI_VISION_PATH/package/edge-ai-app/Config.in"
+source "$BR2_EXTERNAL_EMBEDDED_AI_VISION_PATH/package/rknn-driver/Config.in"
+source "$BR2_EXTERNAL_EMBEDDED_AI_VISION_PATH/package/camera-sensor/Config.in"
+
+endmenu

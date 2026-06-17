@@ -1,0 +1,6 @@
+config BR2_PACKAGE_RKNN_DRIVER
+    bool "rknn-driver"
+    depends on BR2_aarch64
+    help
+      RK3399Pro NPU kernel driver (RK1808).
+      Rockchip Neural Network Processing Unit driver.

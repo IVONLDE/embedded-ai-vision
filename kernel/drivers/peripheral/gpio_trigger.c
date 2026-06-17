@@ -89,6 +89,10 @@ struct gpio_trigger_dev {
 
     /* 全局统计 */
     atomic_t total_triggers;
+
+    /* tasklet 底半部 — 中断事件调度 */
+    struct tasklet_struct tasklet;
+    int tasklet_data;
 };
 
 /* ── GPIO 中断处理 ─────────────────────────────────────── */

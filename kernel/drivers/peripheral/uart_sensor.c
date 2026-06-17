@@ -149,7 +149,7 @@ struct uart_sensor_dev {
     int baudrate;
     int data_bits;
     int stop_bits;
-    char parity[8];
+    const char *parity;
 };
 
 /* ── UART 接收回调 (serdev 框架, 中断上下文) ──────────── */
@@ -460,11 +460,11 @@ static int uart_sensor_parse_dt(struct uart_sensor_dev *usd)
         usd->stop_bits = val;
 
     if (of_property_read_string(np, "parity", &usd->parity))
-        strcpy(usd->parity, "none");
+        usd->parity = "none";
 
     dev_info(dev, "Config: %d baud, %d%c%d\n",
              usd->baudrate, usd->data_bits,
-             usd->parity[0], usd->stop_bits);
+             usd->parity ? usd->parity[0] : 'N', usd->stop_bits);
 
     return 0;
 }

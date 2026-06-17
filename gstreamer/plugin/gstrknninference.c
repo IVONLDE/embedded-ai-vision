@@ -266,7 +266,7 @@ static gboolean preprocess_frame(GstRknnInference *self,
     gint new_w = (gint)(width * scale);
     gint new_h = (gint)(height * scale);
 
-    cv::resize(rgb, resized, cv::Size(new_w, new_w));
+    cv::resize(rgb, resized, cv::Size(new_w, new_h));
 
     /* 填充到模型输入尺寸 */
     gint top = (self->model_height - new_h) / 2;

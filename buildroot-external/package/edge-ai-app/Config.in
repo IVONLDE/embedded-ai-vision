@@ -1,0 +1,10 @@
+config BR2_PACKAGE_EDGE_AI_APP
+    bool "edge-ai-app"
+    depends on BR2_aarch64
+    depends on BR2_PACKAGE_OPENCV4
+    depends on BR2_PACKAGE_MOSQUITTO
+    help
+      Edge AI Camera inference application for RK3399Pro.
+      Multi-threaded pipeline: V4L2 capture → NPU inference →
+      SORT tracking → MQTT publish.
+      Managed by systemd service edge-ai-camera.
