@@ -103,7 +103,7 @@ void Tracker::update(const std::vector<DetectBox> &detections)
                        iou_res.matches.begin(),
                        iou_res.matches.end());
 
-    std::vector<int> all_unmatched_tracks = iou_res.unmatched_tracks2;
+    std::vector<int> all_unmatched_tracks = iou_res.unmatched_tracks;
     all_unmatched_tracks.insert(all_unmatched_tracks.end(),
                                  cascade_res.unmatched_tracks2.begin(),
                                  cascade_res.unmatched_tracks2.end());

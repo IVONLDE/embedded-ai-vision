@@ -13,8 +13,8 @@
 #include "../../comm/detect_box.h"
 
 /* ── 卡尔曼滤波器 ──────────────────────────────────────── */
-/* 状态: [x, y, a, h, vx, vy, va, vh] — 8维 */
-typedef Eigen::Matrix<float, 1, 8, Eigen::RowMajor> KAL_MEAN;
+/* 状态: [x, y, a, h, vx, vy, va, vh] — 8维列向量 */
+typedef Eigen::Matrix<float, 8, 1> KAL_MEAN;
 typedef Eigen::Matrix<float, 8, 8, Eigen::RowMajor> KAL_COVA;
 
 class KalmanFilter {

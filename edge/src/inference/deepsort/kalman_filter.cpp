@@ -51,7 +51,7 @@ void KalmanFilter::predict(KAL_MEAN &mean, KAL_COVA &covariance)
     _motion_cov(6, 6) = 1e-5f;
     _motion_cov(7, 7) = std_vel * std_vel;
 
-    mean = _motion_mat * mean.transpose();
+    mean = _motion_mat * mean;
     covariance = _motion_mat * covariance * _motion_mat.transpose() + _motion_cov;
 }
 
@@ -75,8 +75,8 @@ void KalmanFilter::update(KAL_MEAN &mean, KAL_COVA &covariance,
     Eigen::Matrix<float, 8, 4> K = covariance * H.transpose() * S.inverse();
 
     /* 更新 */
-    Eigen::Matrix<float, 4, 1> y = measurement - H * mean.transpose();
-    mean = mean.transpose() + K * y;
+    Eigen::Matrix<float, 4, 1> y = measurement - H * mean;
+    mean = mean + K * y;
 
     Eigen::Matrix<float, 8, 8> I = Eigen::Matrix<float, 8, 8>::Identity();
     covariance = (I - K * H) * covariance;

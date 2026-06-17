@@ -8,6 +8,7 @@
 
 #include "detect.h"
 #include <algorithm>
+#include <cfloat>
 #include <climits>
 #include <cmath>
 #include <cstring>
@@ -99,7 +100,7 @@ static int process_layer_fp(float *input, const int *anchor,
 {
     int valid_count = 0;
     int grid_len = grid_h * grid_w;
-    float thres = -1.0f * logf((1.0f / threshold) - 1.0f);
+    float thres = threshold > 0.0f ? -1.0f * logf((1.0f / threshold) - 1.0f) : -FLT_MAX;
 
     for (int a = 0; a < 3; a++) {
         for (int i = 0; i < grid_h; i++) {
@@ -176,15 +177,16 @@ int post_process_fp(float *input0, float *input1, float *input2,
 
     /* 构建结果 */
     for (int i = 0; i < valid_count; i++) {
-        if (indices[i] == -1 || scores[i] < conf_threshold) continue;
+        if (indices[i] == -1) continue;
         int n = indices[i];
+        if (scores[n] < conf_threshold) continue;
 
         DetectBox det;
         det.x1 = boxes[n * 4 + 0];
         det.y1 = boxes[n * 4 + 1];
         det.x2 = boxes[n * 4 + 0] + boxes[n * 4 + 2];
         det.y2 = boxes[n * 4 + 1] + boxes[n * 4 + 3];
-        det.confidence = scores[i];
+        det.confidence = scores[n];
         det.classID = 0;  /* 单类 */
         det.trackID = -1;
 

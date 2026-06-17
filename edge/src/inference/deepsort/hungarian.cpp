@@ -45,7 +45,7 @@ void Hungarian::solve(const Eigen::MatrixXf &cost_matrix)
     /* 贪心初始匹配 */
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
-            if (fabs(_cost(i, j)) < 1e-6f && !col_cover[j]) {
+            if (std::abs(_cost(i, j)) < 1e-6f && !col_cover[j]) {
                 _assignment[i] = j;
                 col_cover[j] = 1;
                 break;
