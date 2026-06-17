@@ -10,21 +10,7 @@
 
 #include <vector>
 #include <Eigen/Dense>
-
-/* ── 检测框 (与原项目 box.h 兼容) ──────────────────────── */
-struct DetectBox {
-    float x1, y1, x2, y2;
-    float confidence;
-    float classID;
-    float trackID = -1;
-
-    DetectBox() : x1(0), y1(0), x2(0), y2(0),
-                  confidence(0), classID(-1), trackID(-1) {}
-    DetectBox(float _x1, float _y1, float _x2, float _y2,
-              float _conf = 0, float _cls = -1)
-        : x1(_x1), y1(_y1), x2(_x2), y2(_y2),
-          confidence(_conf), classID(_cls), trackID(-1) {}
-};
+#include "../../comm/detect_box.h"
 
 /* ── 卡尔曼滤波器 ──────────────────────────────────────── */
 /* 状态: [x, y, a, h, vx, vy, va, vh] — 8维 */

@@ -9,13 +9,7 @@
 #include <string>
 #include <vector>
 #include <functional>
-
-struct DetectBox {
-    float x1, y1, x2, y2;
-    float confidence;
-    float classID;
-    float trackID;
-};
+#include "detect_box.h"
 
 /*
  * MqttPublisher — MQTT 检测结果上报

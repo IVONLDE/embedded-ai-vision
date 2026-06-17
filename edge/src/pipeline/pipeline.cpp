@@ -22,6 +22,7 @@
 #include "../io/v4l2_capture.h"
 #include "../io/file_input.h"
 #include "../comm/mqtt_publisher.h"
+#include "../comm/detect_box.h"
 #include "../comm/grpc_server.h"
 
 #include <atomic>

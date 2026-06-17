@@ -7,8 +7,7 @@
 #define YOLOV5_DECODE_H
 
 #include <vector>
-
-struct DetectBox;
+#include "../../comm/detect_box.h"
 
 /*
  * post_process_fp — YOLOv5 float32 输出后处理
