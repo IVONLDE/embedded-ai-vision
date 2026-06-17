@@ -1,0 +1,422 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Device Tree for RK3399Pro Edge AI Camera Board
+ *
+ * 板级描述:
+ *   - SoC:  Rockchip RK3399Pro (2×Cortex-A72 + 4×Cortex-A53)
+ *   - NPU:  RK1808 NPU (单核, 3 TOPS, RKNN-Toolkit1)
+ *   - RAM:  4GB LPDDR4
+ *   - eMMC: 32GB
+ *   - SD卡: SDMMC
+ *
+ * 外设配置:
+ *   - Camera:  IMX415 红外传感器 (MIPI CSI-2, 4-lane, I2C3 addr 0x1a)
+ *   - UART4:   GPS/环境传感器 (115200 8N1)
+ *   - GPIO:    LED指示灯 (GPIO0_B5), 补光灯控制 (GPIO3_C1)
+ *   - NPU CMA: 512MB 连续内存池 (dts reserved-memory)
+ *   - 编码:    MFC H.264/H.265 硬件编码器
+ *
+ * 基于 Rockchip rk3399pro-evb.dts 修改
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+#include <dt-bindings/clock/rk3399-cru.h>
+#include "rk3399pro.dtsi"
+#include "rk3399pro-camera-imx415.dtsi"
+
+/ {
+    model = "RK3399Pro Edge AI Camera Board";
+    compatible = "rockchip,rk3399pro-edge-ai-camera", "rockchip,rk3399pro";
+
+    aliases {
+        mmc0 = &sdio0;   /* eMMC */
+        mmc1 = &sdmmc;   /* SD Card */
+        serial0 = &uart2; /* Debug UART */
+        serial1 = &uart4; /* GPS Sensor UART */
+    };
+
+    chosen {
+        stdout-path = "serial2:1500000n8";
+        bootargs = "earlycon=uart8250,mmio32,0xff1a0000 console=ttyS2,1500000n8 "
+                   "root=/dev/mmcblk1p2 rootwait rw "
+                   "cma=512M "
+                   "isolcpus=4,5 "
+                   "nohz_full=4,5 "
+                   "rcu_nocbs=4,5";
+    };
+
+    /*
+     * ============================================================
+     *  CMA 内存池 — NPU 推理需要大块连续物理内存 (Zero-Copy DMA)
+     *  RK3399Pro NPU 要求至少256MB, 本项目预留512MB
+     * ============================================================
+     */
+    reserved-memory {
+        #address-cells = <2>;
+        #size-cells = <2>;
+        ranges;
+
+        npu_cma_region: npu-cma@40000000 {
+            compatible = "shared-dma-pool";
+            reusable;
+            reg = <0x0 0x40000000 0x0 0x20000000>;  /* 512MB at 1GB */
+            linux,cma-default;
+            status = "okay";
+        };
+
+        /* V4L2 DMA-BUF 帧缓冲 (4×1080p RGB = 4×1920×1080×3 ≈ 25MB) */
+        camera_dma_region: camera-dma@60000000 {
+            compatible = "shared-dma-pool";
+            reusable;
+            reg = <0x0 0x60000000 0x0 0x02000000>;   /* 32MB */
+            status = "okay";
+        };
+    };
+
+    /*
+     * ============================================================
+     *  电源管理 — 摄像头独立供电, AVDD 2.8V, DVDD 1.2V, IOVDD 1.8V
+     * ============================================================
+     */
+    vcc_camera: vcc-camera-regulator {
+        compatible = "regulator-fixed";
+        regulator-name = "vcc_camera";
+        regulator-min-microvolt = <2800000>;
+        regulator-max-microvolt = <2800000>;
+        regulator-always-on;
+        regulator-boot-on;
+        gpio = <&gpio3 RK_PC0 GPIO_ACTIVE_HIGH>;
+        enable-active-high;
+        vin-supply = <&vcc_sys>;
+    };
+
+    vcc_1v2_camera: vcc-1v2-camera-regulator {
+        compatible = "regulator-fixed";
+        regulator-name = "vcc_1v2_camera";
+        regulator-min-microvolt = <1200000>;
+        regulator-max-microvolt = <1200000>;
+        regulator-always-on;
+        regulator-boot-on;
+        vin-supply = <&vcc_sys>;
+    };
+
+    /*
+     * ============================================================
+     *  GPIO 外设
+     *   - gpio-leds:      板载LED指示灯 (心跳/告警)
+     *   - gpio-illuminator: 红外补光灯 (GPIO控制)
+     *   - gpio-key:       用户按键 (拍照/重置)
+     * ============================================================
+     */
+    gpio-leds {
+        compatible = "gpio-leds";
+        pinctrl-names = "default";
+        pinctrl-0 = <&led_pin>;
+
+        heartbeat {
+            label = "heartbeat";
+            gpios = <&gpio0 RK_PB5 GPIO_ACTIVE_HIGH>;
+            linux,default-trigger = "heartbeat";
+            default-state = "on";
+        };
+
+        alarm {
+            label = "alarm";
+            gpios = <&gpio3 RK_PC1 GPIO_ACTIVE_HIGH>;
+            default-state = "off";
+        };
+    };
+
+    gpio-illuminator {
+        compatible = "gpio-control";
+        illuminator-gpios = <&gpio3 RK_PC1 GPIO_ACTIVE_HIGH>;
+        label = "ir-illuminator";
+        default-state = "off";
+    };
+
+    gpio-keys {
+        compatible = "gpio-keys";
+        pinctrl-names = "default";
+        pinctrl-0 = <&key_pin>;
+
+        capture-key {
+            label = "capture";
+            gpios = <&gpio0 RK_PA2 GPIO_ACTIVE_LOW>;
+            linux,code = <0x100>;  /* BTN_0 */
+            debounce-interval = <50>;
+            wakeup-source;
+        };
+    };
+};
+
+/*
+ * ============================================================
+ *  CPU 电源域与频率配置
+ *  - CPU4-5 (A72) 隔离给AI推理线程, 最高频率
+ *  - CPU0-3 (A53) 处理采集/上报/系统任务
+ * ============================================================
+ */
+&cluster0_opp_table {
+    opp-1416000000 {
+        opp-hz = /bits/ 64 <1416000000>;
+        opp-microvolt = <1125000>;
+        status = "okay";
+    };
+};
+
+&cluster1_opp_table {
+    opp-1800000000 {
+        opp-hz = /bits/ 64 <1800000000>;
+        opp-microvolt = <1200000>;
+        status = "okay";
+    };
+};
+
+/*
+ * ============================================================
+ *  NPU — RK1808 神经网络处理单元
+ *  绑定到 RK3399Pro PCIe 内部总线
+ *  要求 CMA 内存池已配置
+ * ============================================================
+ */
+&rknpu {
+    status = "okay";
+    memory-region = <&npu_cma_region>;
+    power-domains = <&power RK3399_PD_NPU>;
+};
+
+&rknpu_mmu {
+    status = "okay";
+};
+
+/*
+ * ============================================================
+ *  I2C3 — 连接 IMX415 摄像头传感器 (从地址 0x1a)
+ *  时钟: 外部24MHz晶振
+ *  复位: GPIO3_C6 (低有效复位)
+ * ============================================================
+ */
+&i2c3 {
+    status = "okay";
+    clock-frequency = <400000>;  /* 400kHz Fast Mode */
+    i2c-scl-rising-time-ns = <168>;
+    i2c-scl-falling-time-ns = <28>;
+
+    imx415: camera-sensor@1a {
+        compatible = "sony,imx415";
+        reg = <0x1a>;
+        clocks = <&cru SCLK_CIF_OUT>;
+        clock-names = "xvclk";
+        clock-frequency = <24000000>;
+
+        reset-gpios = <&gpio3 RK_PC6 GPIO_ACTIVE_LOW>;
+        powerdown-gpios = <&gpio3 RK_PD0 GPIO_ACTIVE_HIGH>;
+
+        /* MIPI CSI-2 配置: 4-lane, 每lane 1.5Gbps */
+        mipi-data-lanes = <1 2 3 4>;
+        lane-polarities = <0 0 0 0>;
+
+        /* 默认输出: 1920×1080 @30fps, RAW10 */
+        sensor-width = <1920>;
+        sensor-height = <1080>;
+        max-fps = <30>;
+
+        vcc-supply = <&vcc_camera>;
+        vcc-1v2-supply = <&vcc_1v2_camera>;
+
+        port {
+            imx415_ep: endpoint {
+                remote-endpoint = <&mipi_csi2_input>;
+                data-lanes = <1 2 3 4>;
+                link-frequencies = /bits/ 64 <891000000>;
+            };
+        };
+    };
+};
+
+/*
+ * ============================================================
+ *  MIPI CSI-2 Host Controller
+ *  - 接收 IMX415 的 4-lane MIPI 信号
+ *  - 通过 ISP 管道输出 /dev/video0
+ * ============================================================
+ */
+&mipi_csi2 {
+    status = "okay";
+
+    ports {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        port@0 {
+            reg = <0>;
+            mipi_csi2_input: endpoint {
+                remote-endpoint = <&imx415_ep>;
+                data-lanes = <1 2 3 4>;
+            };
+        };
+
+        port@1 {
+            reg = <1>;
+            mipi_csi2_output: endpoint {
+                remote-endpoint = <&isp_input>;
+            };
+        };
+    };
+};
+
+&rkisp1_0 {
+    status = "okay";
+
+    port {
+        isp_input: endpoint {
+            remote-endpoint = <&mipi_csi2_output>;
+        };
+    };
+};
+
+/*
+ * ============================================================
+ *  UART4 — 连接 GPS/环境传感器模块
+ *  协议:  NMEA 0183 (GPS) / 自定义协议 (环境传感器)
+ *  参数:  115200 baud, 8 data bits, no parity, 1 stop bit
+ * ============================================================
+ */
+&uart4 {
+    status = "okay";
+    pinctrl-names = "default";
+    pinctrl-0 = <&uart4_xfer>;
+
+    gps-sensor {
+        compatible = "edge-ai,uart-sensor";
+        baudrate = <115200>;
+        data-bits = <8>;
+        parity = "none";
+        stop-bits = <1>;
+        read-buffer-size = <4096>;
+    };
+};
+
+/*
+ * ============================================================
+ *  SPI0 — 预留 (可接环境传感器/ADC)
+ * ============================================================
+ */
+&spi0 {
+    status = "disabled";
+};
+
+/*
+ * ============================================================
+ *  千兆以太网 — RTL8211E PHY
+ * ============================================================
+ */
+&gmac {
+    status = "okay";
+    phy-mode = "rgmii";
+    phy-handle = <&rtl8211e>;
+    snps,reset-gpio = <&gpio3 RK_PB7 GPIO_ACTIVE_LOW>;
+    snps,reset-active-low;
+    snps,reset-delays-us = <0 10000 50000>;
+    tx_delay = <0x28>;
+    rx_delay = <0x11>;
+
+    mdio {
+        compatible = "snps,dwmac-mdio";
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        rtl8211e: ethernet-phy@1 {
+            reg = <1>;
+        };
+    };
+};
+
+/*
+ * ============================================================
+ *  SDMMC — SD卡槽 (存放检测日志和视频)
+ * ============================================================
+ */
+&sdmmc {
+    status = "okay";
+    bus-width = <4>;
+    max-frequency = <150000000>;
+    cap-sd-highspeed;
+    cap-mmc-highspeed;
+    cd-gpios = <&gpio0 RK_PA7 GPIO_ACTIVE_LOW>;
+    disable-wp;
+    vmmc-supply = <&vcc_sd>;
+    vqmmc-supply = <&vcc_sdio>;
+    supports-sd;
+};
+
+/*
+ * ============================================================
+ *  eMMC — 系统存储 (rootfs)
+ * ============================================================
+ */
+&sdio0 {
+    status = "okay";
+    bus-width = <8>;
+    max-frequency = <200000000>;
+    cap-mmc-highspeed;
+    mmc-hs200-1_8v;
+    non-removable;
+};
+
+/*
+ * ============================================================
+ *  USB 3.0 Host — 可接U盘导出日志, 或4G模块
+ * ============================================================
+ */
+&usbdrd3_0 {
+    status = "okay";
+};
+
+&usbdrd_dwc3_0 {
+    status = "okay";
+    dr_mode = "host";
+};
+
+/*
+ * ============================================================
+ *  PMU — 电源管理单元 (RK808-D)
+ * ============================================================
+ */
+&pmu_io_domains {
+    status = "okay";
+    pmu1830-supply = <&vcc_1v8>;
+};
+
+/*
+ * ============================================================
+ *  PinCtrl — GPIO 引脚功能复用
+ * ============================================================
+ */
+&pinctrl {
+    led_pin: led-pin {
+        rockchip,pins =
+            <0 RK_PB5 RK_FUNC_GPIO &pcfg_pull_none>,    /* LED heartbeat */
+            <3 RK_PC1 RK_FUNC_GPIO &pcfg_pull_none>;    /* LED alarm/illuminator */
+    };
+
+    key_pin: key-pin {
+        rockchip,pins =
+            <0 RK_PA2 RK_FUNC_GPIO &pcfg_pull_up>;      /* User button */
+    };
+
+    uart4_xfer: uart4-xfer {
+        rockchip,pins =
+            <1 RK_PA7 RK_FUNC_1 &pcfg_pull_up>,          /* UART4 TX */
+            <1 RK_PB0 RK_FUNC_1 &pcfg_pull_up>;          /* UART4 RX */
+    };
+
+    camera_rst: camera-rst {
+        rockchip,pins =
+            <3 RK_PC6 RK_FUNC_GPIO &pcfg_pull_none>,     /* IMX415 RST */
+            <3 RK_PD0 RK_FUNC_GPIO &pcfg_pull_none>;     /* IMX415 PWDN */
+    };
+};

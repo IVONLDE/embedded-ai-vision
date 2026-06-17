@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Device Tree Include for IMX415 Camera Sensor on RK3399Pro
+ *
+ * IMX415 规格:
+ *   - 1/2.8" CMOS, 有效像素 1920×1080
+ *   - MIPI CSI-2 4-lane, 每lane最高 2.224Gbps
+ *   - 支持 RAW10/RAW12 输出
+ *   - I2C 从地址 0x1a
+ *   - 外部时钟 24MHz
+ *
+ * 此文件被 rk3399pro-edge-ai-camera.dts 引用
+ */
+
+/ {
+    ext_cam_clk: ext-cam-clk {
+        compatible = "fixed-clock";
+        #clock-cells = <0>;
+        clock-frequency = <24000000>;
+        clock-output-names = "ext_cam_clk";
+    };
+};
+
+/*
+ * MIPI PHY 配置
+ * 4-lane, 每lane 1.5Gbps (HS mode)
+ */
+&mipi_dphy_rx0 {
+    status = "okay";
+};
+
+/*
+ * ISP 配置
+ * 输入: MIPI CSI RAW10
+ * 输出: YUV/NV12 (通过 /dev/video0)
+ */
+&rkisp1_0 {
+    status = "okay";
+};
+
+&isp0_mmu {
+    status = "okay";
+};

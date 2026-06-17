@@ -1,0 +1,29 @@
+# Edge AI Peripheral Drivers — Kconfig
+
+menu "Edge AI Peripheral Drivers"
+
+config EDGE_AI_UART_SENSOR
+    tristate "UART Sensor Character Device Driver"
+    depends on SERIAL_DEV_BUS
+    help
+      Character device driver that wraps a UART port for sensor data
+      acquisition (GPS NMEA / environmental sensors). Provides
+      /dev/uart_sensor with read/write/poll/ioctl interface and
+      sysfs statistics under /sys/class/edge-sensor/.
+
+      To compile this driver as a module, choose M here:
+      the module will be called uart_sensor.
+
+config EDGE_AI_GPIO_TRIGGER
+    tristate "GPIO Trigger Driver"
+    depends on GPIOLIB
+    help
+      GPIO interrupt driver that exposes trigger events via
+      /dev/gpio_trigger. Supports multiple GPIO pins with
+      configurable debounce. Uses tasklet for bottom-half
+      interrupt processing.
+
+      To compile this driver as a module, choose M here:
+      the module will be called gpio_trigger.
+
+endmenu

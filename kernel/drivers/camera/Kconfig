@@ -1,0 +1,41 @@
+# Edge AI Camera Drivers — Kconfig
+
+menu "Edge AI Camera Drivers"
+
+config EDGE_AI_IMX415
+    tristate "Sony IMX415 V4L2 Camera Sensor Driver"
+    depends on I2C && VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
+    select REGMAP_I2C
+    select V4L2_FWNODE
+    help
+      V4L2 sub-device driver for Sony IMX415 1/2.8" CMOS image sensor.
+      Supports 1920×1080 @30fps RAW10 output via MIPI CSI-2 4-lane.
+
+      To compile this driver as a module, choose M here:
+      the module will be called imx415_v4l2.
+
+config EDGE_AI_UART_SENSOR
+    tristate "UART Sensor Character Device Driver"
+    depends on SERIAL_DEV_BUS
+    help
+      Character device driver that wraps a UART port for sensor data
+      acquisition (GPS NMEA / environmental sensors). Provides
+      /dev/uart_sensor with read/write/poll/ioctl interface and
+      sysfs statistics under /sys/class/edge-sensor/.
+
+      To compile this driver as a module, choose M here:
+      the module will be called uart_sensor.
+
+config EDGE_AI_GPIO_TRIGGER
+    tristate "GPIO Trigger Driver"
+    depends on GPIOLIB
+    help
+      GPIO interrupt driver that exposes trigger events via
+      /dev/gpio_trigger. Supports multiple GPIO pins with
+      configurable debounce. Uses tasklet for bottom-half
+      interrupt processing.
+
+      To compile this driver as a module, choose M here:
+      the module will be called gpio_trigger.
+
+endmenu
