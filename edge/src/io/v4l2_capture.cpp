@@ -30,12 +30,17 @@
 bool V4l2Capture::open(const std::string &device,
                        int width, int height, int fps)
 {
+    /* 完全重置状态 (支持 re-open) */
+    if (_fd >= 0)
+        close();
+
     _device = device;
     _width = width;
     _height = height;
     _fps = fps;
     _fd = -1;
     _streaming = false;
+    _current_buf_index = -1;
 
     /* 打开 V4L2 设备 */
     _fd = ::open(device.c_str(), O_RDWR | O_NONBLOCK);

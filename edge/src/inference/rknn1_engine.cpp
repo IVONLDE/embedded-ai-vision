@@ -177,7 +177,7 @@ int Rknn1Engine::load_model(const char *model_path)
  *   1. 加载新模型到临时 context
  *   2. 验证新模型输入/输出兼容性
  *   3. 查询新模型输出属性
- *   4. 原子替换 _ctx + _output_attrs
+ *   4. 原子替换 _ctx + _output_attrs + _n_output
  *   5. 释放旧 context
  *
  * 注意: 调用时需确保没有正在进行的推理!
@@ -259,11 +259,35 @@ int Rknn1Engine::hot_reload_model(const char *new_model_path)
         return -1;
     }
 
-    /* 查询新模型输出属性 (修复: hot_reload 后旧 output_attrs 可能不兼容) */
-    rknn_tensor_attr new_output_attrs[3];
+    /* 先查询新模型输出层数 (修复: 不同模型 n_output 可能不同) */
+    rknn_tensor_attr temp_output_attr;
+    memset(&temp_output_attr, 0, sizeof(temp_output_attr));
+    temp_output_attr.index = 0;
+    ret = rknn_query(new_ctx, RKNN_QUERY_OUTPUT_ATTR,
+                     &temp_output_attr, sizeof(rknn_tensor_attr));
+    if (ret < 0) {
+        fprintf(stderr, "[RKNN1] hot-reload query output fail!\n");
+        rknn_destroy(new_ctx);
+        return -1;
+    }
+
+    /* 查询所有输出层属性 */
+    int new_n_output = 1;
+    rknn_tensor_attr new_output_attrs[RKNN_MAX_OUTPUTS];
     memset(new_output_attrs, 0, sizeof(new_output_attrs));
-    int actual_n_output = (new_ctx ? 3 : _n_output);
-    for (int i = 0; i < actual_n_output; i++) {
+    /* 从索引1继续查询, 直到查询失败 (说明没有更多输出层) */
+    for (int idx = 1; idx < RKNN_MAX_OUTPUTS; idx++) {
+        rknn_tensor_attr probe;
+        memset(&probe, 0, sizeof(probe));
+        probe.index = idx;
+        if (rknn_query(new_ctx, RKNN_QUERY_OUTPUT_ATTR,
+                       &probe, sizeof(rknn_tensor_attr)) < 0)
+            break;
+        new_n_output = idx + 1;
+    }
+
+    /* 重新查询所有输出层 (按正确数量) */
+    for (int i = 0; i < new_n_output && i < RKNN_MAX_OUTPUTS; i++) {
         new_output_attrs[i].index = i;
         ret = rknn_query(new_ctx, RKNN_QUERY_OUTPUT_ATTR,
                          &new_output_attrs[i], sizeof(rknn_tensor_attr));
@@ -279,14 +303,21 @@ int Rknn1Engine::hot_reload_model(const char *new_model_path)
     _ctx = new_ctx;
     _model_path = new_model_path;
 
-    /* 更新输入/输出属性 */
+    /* 更新输入/输出属性 + 输出层数 */
     memcpy(&_input_attrs[0], &new_input_attrs, sizeof(rknn_tensor_attr));
     memcpy(_output_attrs, new_output_attrs, sizeof(new_output_attrs));
+    _n_output = new_n_output;
+
+    /* 清除旧输出缓存 (新模型输出尺寸可能不同) */
+    for (int i = 0; i < RKNN_MAX_OUTPUTS; i++) {
+        _output_buffs[i] = nullptr;
+        _output_copies[i].clear();
+    }
 
     /* 释放旧 context */
     rknn_destroy(old_ctx);
 
-    printf("[RKNN1] Hot-reload complete\n");
+    printf("[RKNN1] Hot-reload complete (n_output=%d)\n", _n_output);
     return 0;
 }
 

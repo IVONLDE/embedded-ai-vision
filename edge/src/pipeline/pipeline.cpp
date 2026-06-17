@@ -423,17 +423,18 @@ static void grpc_server_thread_func(const PipelineConfig &cfg,
  */
 int pipeline_run(const PipelineConfig &cfg)
 {
-    printf("╔══════════════════════════════════════════════╗\n");
-    printf("║  Edge AI Camera Pipeline — RK3399Pro        ║\n");
-    printf("║  Device: %-34s ║\n", cfg.device_id.c_str());
-    printf("║  Scene:  %-34s ║\n", cfg.active_scene.c_str());
-    printf("║  Model:  %-34s ║\n", cfg.inference.model_path.c_str());
-    printf("╚══════════════════════════════════════════════╝\n");
+    try {
+        printf("╔══════════════════════════════════════════════╗\n");
+        printf("║  Edge AI Camera Pipeline — RK3399Pro        ║\n");
+        printf("║  Device: %-34s ║\n", cfg.device_id.c_str());
+        printf("║  Scene:  %-34s ║\n", cfg.active_scene.c_str());
+        printf("║  Model:  %-34s ║\n", cfg.inference.model_path.c_str());
+        printf("╚══════════════════════════════════════════════╝\n");
 
-    /* 注册信号处理 */
-    signal(SIGTERM, signal_handler);
-    signal(SIGINT, signal_handler);
-    signal(SIGHUP, signal_handler);   /* 支持 systemctl reload */
+        /* 注册信号处理 */
+        signal(SIGTERM, signal_handler);
+        signal(SIGINT, signal_handler);
+        signal(SIGHUP, signal_handler);   /* 支持 systemctl reload */
 
     /* 创建队列 */
     int qsize = cfg.system.queue_max_size;
@@ -510,4 +511,10 @@ int pipeline_run(const PipelineConfig &cfg)
     printf("[Pipeline] Shutdown complete\n");
 
     return 0;
+
+    } catch (const std::exception &e) {
+        std::cerr << "[Pipeline] Fatal error: " << e.what() << std::endl;
+        g_running.store(false);
+        return -1;
+    }
 }

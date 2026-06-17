@@ -60,6 +60,9 @@ struct gpio_trigger_pin {
     /* 统计 */
     atomic_t irq_count;         /* 中断计数 */
     ktime_t last_irq_time;      /* 上次中断时间 (去抖用) */
+
+    /* 反向指针 — 中断 handler 需要访问父 dev */
+    struct gpio_trigger_dev *parent;
 };
 
 /* ── 驱动私有数据 ──────────────────────────────────────── */
@@ -145,9 +148,7 @@ static void gpio_trigger_tasklet_func(struct tasklet_struct *t)
 static irqreturn_t gpio_trigger_irq_handler(int irq, void *dev_id)
 {
     struct gpio_trigger_pin *pin = dev_id;
-    struct gpio_trigger_dev *gtd =
-        container_of(pin - pin->index, struct gpio_trigger_dev,
-                     pins[0]);
+    struct gpio_trigger_dev *gtd = pin->parent;  /* 通过反向指针获取父 dev */
     ktime_t now;
     s64 delta_ms;
 
@@ -371,6 +372,7 @@ static int gpio_trigger_parse_dt(struct gpio_trigger_dev *gtd)
         struct gpio_trigger_pin *pin = &gtd->pins[i];
 
         pin->index = i;
+        pin->parent = gtd;  /* 反向指针: 中断 handler 通过 pin->parent 找到 dev */
         pin->desc = devm_gpiod_get_index(dev, "trigger", i,
                                          GPIOD_IN);
         if (IS_ERR(pin->desc)) {

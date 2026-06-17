@@ -15,12 +15,17 @@
 #include <vector>
 #include <stdexcept>
 
+/* RKNN 最大输出层数 (YOLOv5=3, 分类模型=1, 更多层模型可用更大值) */
+#define RKNN_MAX_OUTPUTS 8
+
 class Rknn1Engine {
 public:
     /*
      * 构造函数
      * @param model_path  RKNN 模型文件路径
      * @param cpu_id      绑定的 CPU 核心 (A72: 4/5, A53: 0-3)
+     *
+     * 抛出 std::runtime_error 如果模型加载失败
      */
     Rknn1Engine(const char *model_path, int cpu_id);
 
@@ -31,7 +36,7 @@ public:
      * @param input_data  uint8 输入数据 (NHWC, W×H×C)
      * @return 推理耗时 (微秒), -1 失败
      *
-     * 输出通过 _output_buffs[0..2] 获取 (float32)
+     * 输出通过 _output_buffs[0..n_output-1] 获取 (float32)
      */
     int inference(unsigned char *input_data);
 
@@ -40,7 +45,7 @@ public:
      * @param new_model_path  新模型路径
      * @return 0 成功, -1 失败
      *
-     * 原子替换 context, 不中断推理服务
+     * 原子替换 context + attrs + n_output, 不中断推理服务
      */
     int hot_reload_model(const char *new_model_path);
 
@@ -60,15 +65,15 @@ public:
     /* 公共成员 */
     int _cpu_id;
     int _n_input = 1;
-    int _n_output = 3;  /* YOLOv5 3个输出层 */
+    int _n_output = 3;  /* 动态更新 (hot_reload 可能改变) */
 
     rknn_context _ctx;
     rknn_tensor_attr _input_attrs[1];
-    rknn_tensor_attr _output_attrs[3];
-    float *_output_buffs[3];  /* 推理输出指针 (每次推理后更新) */
+    rknn_tensor_attr _output_attrs[RKNN_MAX_OUTPUTS];  /* 支持不同输出层数 */
+    float *_output_buffs[RKNN_MAX_OUTPUTS];  /* 推理输出指针 (每次推理后更新) */
 
     /* 输出缓冲区副本 (解决悬空指针: rknn_outputs_release 后数据仍可用) */
-    std::vector<float> _output_copies[3];
+    std::vector<float> _output_copies[RKNN_MAX_OUTPUTS];
     void copy_outputs_to_buffer();
 
     std::string _model_path;

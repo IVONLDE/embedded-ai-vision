@@ -5,6 +5,7 @@
 
 #include "file_input.h"
 #include <cstdio>
+#include <cstring>
 
 bool FileInput::open(const std::string &path)
 {
