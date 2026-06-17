@@ -38,11 +38,26 @@ bool FileInput::read_frame(unsigned char **data, int *width, int *height,
     if (!_cap.read(_frame))
         return false;
 
-    *data = _frame.data;
+    /* 深拷贝帧数据避免悬空指针:
+     * cv::Mat _frame 是成员变量，下次 read() 会覆盖内存。
+     * 调用方负责释放此缓冲区。 */
+    int data_size = _frame.total() * _frame.elemSize();
+    unsigned char *copy_data = new unsigned char[data_size];
+    memcpy(copy_data, _frame.data, data_size);
+
+    *data = copy_data;
     *width = _frame.cols;
     *height = _frame.rows;
     *timestamp_us = _frame_idx * 33333;  /* 30fps ≈ 33.3ms per frame */
     _frame_idx++;
 
     return true;
+}
+
+/*
+ * release_frame — 释放 read_frame 中分配的帧数据
+ */
+void FileInput::release_frame(unsigned char *data)
+{
+    delete[] data;
 }

@@ -9,7 +9,9 @@
 #define FILE_INPUT_H
 
 #include <string>
-#include <opencv2/opencv.hpp>
+#include <cstring>
+#include <opencv2/videoio.hpp>
+#include <opencv2/core.hpp>
 
 class FileInput {
 public:
@@ -20,6 +22,7 @@ public:
     void close();
     bool read_frame(unsigned char **data, int *width, int *height,
                     int64_t *timestamp_us);
+    void release_frame(unsigned char *data);
 
 private:
     cv::VideoCapture _cap;

@@ -1,25 +1,23 @@
-/* SPDX-License-Identifier: MIT */
-/*
- * Edge Device Manager Service — 边缘设备管理
- *
- * PC 端 (ISG-mian) 中管理边缘设备的 Service。
- * 通过 gRPC 与边缘设备通信，通过 MQTT 接收检测结果。
- *
- * 功能:
- *   - 设备注册/发现
- *   - 心跳监控
- *   - 模型推送 (OTA)
- *   - 场景切换
- *   - 远程重启
- */
+# SPDX-License-Identifier: MIT
+#
+# Edge Device Manager Service — 边缘设备管理
+#
+# PC 端 (ISG-mian) 中管理边缘设备的 Service。
+# 通过 gRPC 与边缘设备通信，通过 MQTT 接收检测结果。
+#
+# 功能:
+#   - 设备注册/发现
+#   - 心跳监控
+#   - 模型推送 (OTA)
+#   - 场景切换
+#   - 远程重启
 
 from __future__ import annotations
 
-import json
 import time
 import threading
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Callable, Dict, List
 
 
 @dataclass
@@ -60,8 +58,6 @@ class EdgeManagerService:
             "on_detection": [],
             "on_status_change": [],
         }
-        self._running = threading.Event()
-        self._running.set()
 
     # ── 设备注册 ──────────────────────────────────────────
     def register_device(self, device_id: str, host: str,
@@ -123,11 +119,20 @@ class EdgeManagerService:
         if not device:
             return {"status": "error", "message": "Device not found"}
 
+        # 校验文件大小 (限制 200MB, 避免 OOM)
+        import os
+        file_size = os.path.getsize(model_path)
+        max_size = 200 * 1024 * 1024  # 200MB
+        if file_size > max_size:
+            return {"status": "error",
+                    "message": f"Model too large: {file_size} bytes (max {max_size})"}
+
         try:
             with open(model_path, "rb") as f:
                 model_data = f.read()
-        except FileNotFoundError:
-            return {"status": "error", "message": f"Model file not found: {model_path}"}
+        except (FileNotFoundError, OSError) as e:
+            return {"status": "error",
+                    "message": f"Cannot read model file: {e}"}
 
         print(f"[EdgeManager] Pushing model to {device_id}: {model_path} "
               f"({len(model_data)} bytes)")
