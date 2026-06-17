@@ -12,6 +12,7 @@
 #include "rknn_api.h"
 #include <queue>
 #include <string>
+#include <vector>
 
 class Rknn1Engine {
 public:
@@ -64,6 +65,10 @@ public:
     rknn_tensor_attr _input_attrs[1];
     rknn_tensor_attr _output_attrs[3];
     float *_output_buffs[3];  /* 推理输出指针 (每次推理后更新) */
+
+    /* 输出缓冲区副本 (解决悬空指针: rknn_outputs_release 后数据仍可用) */
+    std::vector<float> _output_copies[3];
+    void copy_outputs_to_buffer();
 
     std::string _model_path;
     bool _model_loaded;

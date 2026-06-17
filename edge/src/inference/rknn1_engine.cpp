@@ -311,6 +311,9 @@ int Rknn1Engine::inference(unsigned char *input_data)
         _output_buffs[i] = (float *)outputs[i].buf;
     }
 
+    /* 复制输出数据到本地缓存 (避免 rknn_outputs_release 后悬空指针) */
+    copy_outputs_to_buffer();
+
     /* ── 查询推理耗时 ── */
     rknn_perf_run perf_run;
     ret = rknn_query(_ctx, RKNN_QUERY_PERF_RUN,
@@ -323,6 +326,25 @@ int Rknn1Engine::inference(unsigned char *input_data)
         return perf_run.run_duration;  /* 微秒 */
 
     return 0;  /* 查询失败但推理成功 */
+}
+
+/*
+ * copy_outputs_to_buffer — 将 RKNN 输出复制到本地缓存
+ *
+ * 必须在 rknn_outputs_release 之前调用！
+ * 保证后处理阶段不会访问已释放的内存。
+ */
+void Rknn1Engine::copy_outputs_to_buffer()
+{
+    for (int i = 0; i < _n_output; i++) {
+        if (!_output_buffs[i])
+            continue;
+        int n_elems = _output_attrs[i].n_elems;
+        _output_copies[i].resize(n_elems);
+        memcpy(_output_copies[i].data(), _output_buffs[i],
+               n_elems * sizeof(float));
+        _output_buffs[i] = _output_copies[i].data();  /* 指向本地副本 */
+    }
 }
 
 /* ── 性能统计 ──────────────────────────────────────────── */
@@ -338,14 +360,12 @@ float Rknn1Engine::cal_performance(std::queue<float> &history,
     if (history.size() < 10) {
         history.push(cost_ms);
         sum += cost_ms;
-    } else if (history.size() == 10) {
+    } else {
+        /* 队列已满, 替换最旧的数据 */
         sum -= history.front();
         sum += cost_ms;
         history.pop();
         history.push(cost_ms);
-    } else {
-        fprintf(stderr, "[RKNN1] Performance queue error\n");
-        return -1;
     }
     return sum / history.size();
 }

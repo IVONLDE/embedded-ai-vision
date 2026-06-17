@@ -65,6 +65,7 @@ private:
     int _port;
     std::string _client_id;
     std::string _cmd_topic;
+    int _last_published_mid = 0;
 
     CommandCallback _cmd_callback;
 };

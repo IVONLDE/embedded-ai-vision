@@ -25,6 +25,7 @@
 #include "../comm/grpc_server.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <csignal>
 #include <iostream>
 #include <mutex>
@@ -43,6 +44,7 @@ struct FrameData {
     int width;
     int height;
     int64_t timestamp_us;
+    V4l2Capture *capture;     /* 用于归还 V4L2 缓冲区 */
 };
 
 struct DetectResult {
@@ -57,27 +59,38 @@ struct TrackResult {
     int64_t timestamp_us;
 };
 
-/* SPSC 队列 (简化实现, 生产环境用 boost::lockfree::spsc_queue) */
+/* 线程间队列 (条件变量实现, 避免忙等自旋) */
 template<typename T>
 class SpscQueue {
 public:
     explicit SpscQueue(int max_size) : _max_size(max_size) {}
 
     bool push(const T &item) {
-        std::lock_guard<std::mutex> lock(_mutex);
+        std::unique_lock<std::mutex> lock(_mutex);
         if (_queue.size() >= (size_t)_max_size)
             return false;  /* 队列满 */
         _queue.push(item);
+        lock.unlock();
+        _cond.notify_one();
         return true;
     }
 
     bool pop(T &item) {
-        std::lock_guard<std::mutex> lock(_mutex);
-        if (_queue.empty())
+        std::unique_lock<std::mutex> lock(_mutex);
+        _cond.wait(lock, [this]{ return !_queue.empty() || _shutdown; });
+        if (_shutdown && _queue.empty())
             return false;
         item = _queue.front();
         _queue.pop();
+        lock.unlock();
+        _cond.notify_one();
         return true;
+    }
+
+    void shutdown() {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _shutdown = true;
+        _cond.notify_all();
     }
 
     size_t size() {
@@ -89,6 +102,8 @@ private:
     std::queue<T> _queue;
     int _max_size;
     std::mutex _mutex;
+    std::condition_variable _cond;
+    bool _shutdown = false;
 };
 
 /* ── 信号处理 ──────────────────────────────────────────── */
@@ -100,7 +115,7 @@ private:
  */
 static void signal_handler(int sig)
 {
-    if (sig == SIGTERM || sig == SIGINT) {
+    if (sig == SIGTERM || sig == SIGINT || sig == SIGHUP) {
         g_shutdown_requested.store(true);
         g_running.store(false);
     }
@@ -149,6 +164,9 @@ static void capture_thread_func(const PipelineConfig &cfg,
             continue;
         }
 
+        /* 记录采集对象指针, 用于推理完成后归还缓冲区 */
+        frame.capture = &capture;
+
         /* 推入队列 (满则阻塞) */
         while (g_running.load() && !frame_queue.push(frame)) {
             usleep(1000);  /* 等待消费 */
@@ -196,12 +214,19 @@ static void inference_thread_func(const PipelineConfig &cfg,
         /* 隔帧检测 */
         if (cfg.inference.det_interval > 1 &&
             frame.index % cfg.inference.det_interval != 0) {
-            /* 复用上一帧结果, 跳过推理 */
+            /* 复用上一帧结果, 跳过推理 — 但仍需归还 V4L2 缓冲区 */
+            if (frame.capture)
+                frame.capture->release_frame();
             continue;
         }
 
         /* NPU 推理 */
         int cost_us = engine.inference(frame.data);
+
+        /* 归还 V4L2 缓冲区 (推理完成后立即归还, 避免耗尽) */
+        if (frame.capture)
+            frame.capture->release_frame();
+
         if (cost_us < 0) {
             std::cerr << "[Pipeline] Inference failed on frame "
                       << frame.index << std::endl;
@@ -407,6 +432,7 @@ int pipeline_run(const PipelineConfig &cfg)
     /* 注册信号处理 */
     signal(SIGTERM, signal_handler);
     signal(SIGINT, signal_handler);
+    signal(SIGHUP, signal_handler);   /* 支持 systemctl reload */
 
     /* 创建队列 */
     int qsize = cfg.system.queue_max_size;
@@ -453,6 +479,11 @@ int pipeline_run(const PipelineConfig &cfg)
 
     /* ── 五层逆序释放 ── */
     printf("[Pipeline] Joining threads...\n");
+
+    /* 通知所有队列 shutdown, 唤醒阻塞的 pop() */
+    frame_queue.shutdown();
+    detect_queue.shutdown();
+    track_queue.shutdown();
 
     /* Layer 5: 通信层 */
     if (grpc_th.joinable())

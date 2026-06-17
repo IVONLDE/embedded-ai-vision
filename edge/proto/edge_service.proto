@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+package edge_ai;
+
+// ── gRPC 服务定义 ────────────────────────────────────────
+service EdgeService {
+  // 推送新模型到边缘设备
+  rpc PushModel(ModelRequest) returns (ModelResponse);
+
+  // 切换推理场景
+  rpc SwitchScene(SceneRequest) returns (SceneResponse);
+
+  // 查询设备状态
+  rpc GetStatus(StatusRequest) returns (StatusResponse);
+
+  // 更新运行时配置
+  rpc UpdateConfig(ConfigRequest) returns (ConfigResponse);
+
+  // 重启推理服务
+  rpc Restart(RestartRequest) returns (RestartResponse);
+}
+
+// ── 模型推送 ─────────────────────────────────────────────
+message ModelRequest {
+  string device_id = 1;          // 设备ID
+  bytes model_data = 2;          // 模型文件二进制数据
+  string sha256_checksum = 3;    // SHA256 校验和
+  string model_name = 4;         // 模型名称
+  string model_version = 5;      // 模型版本号
+}
+
+message ModelResponse {
+  int32 status = 1;              // 0=成功, -1=失败
+  string message = 2;            // 状态描述
+  string model_version = 3;      // 当前模型版本
+}
+
+// ── 场景切换 ─────────────────────────────────────────────
+message SceneRequest {
+  string device_id = 1;
+  string scene_name = 2;         // face / body / vehicle / defect
+}
+
+message SceneResponse {
+  int32 status = 1;
+  string message = 2;
+  string active_scene = 3;       // 切换后的场景
+}
+
+// ── 状态查询 ─────────────────────────────────────────────
+message StatusRequest {
+  string device_id = 1;
+}
+
+message StatusResponse {
+  int32 status = 1;
+  string device_id = 2;
+  string scene = 3;              // 当前场景
+  string model_version = 4;      // 当前模型版本
+  float fps = 5;                // 实时帧率
+  float npu_usage = 6;          // NPU 利用率 (%)
+  float cpu_temp = 7;           // CPU 温度
+  int64 memory_bytes = 8;       // 内存占用
+  int64 uptime_sec = 9;         // 运行时长
+  int32 frame_count = 10;       // 累计帧数
+  float avg_inference_ms = 11;  // 平均推理耗时
+}
+
+// ── 配置更新 ─────────────────────────────────────────────
+message ConfigRequest {
+  string device_id = 1;
+  map<string, string> params = 2;  // 键值对参数
+}
+
+message ConfigResponse {
+  int32 status = 1;
+  string message = 2;
+}
+
+// ── 重启 ─────────────────────────────────────────────────
+message RestartRequest {
+  string device_id = 1;
+}
+
+message RestartResponse {
+  int32 status = 1;
+  string message = 2;
+}

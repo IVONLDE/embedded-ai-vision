@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package edge_ai;
+
+// ── 检测结果 ─────────────────────────────────────────────
+message DetectionResult {
+  string device_id = 1;
+  int32 frame_index = 2;
+  int64 timestamp_us = 3;
+  string scene = 4;
+  repeated Detection detections = 5;
+}
+
+message Detection {
+  float x1 = 1;
+  float y1 = 2;
+  float x2 = 3;
+  float y2 = 4;
+  float confidence = 5;
+  int32 class_id = 6;
+  int32 track_id = 7;
+  string class_name = 8;
+}
+
+// ── 心跳 ─────────────────────────────────────────────────
+message HealthReport {
+  string device_id = 1;
+  string status = 2;           // online / offline / error
+  int32 frame_index = 3;
+  int64 timestamp = 4;
+  float fps = 5;
+  float npu_usage = 6;
+  float cpu_temp = 7;
+  int64 memory_bytes = 8;
+  string model_version = 9;
+  string scene = 10;
+}

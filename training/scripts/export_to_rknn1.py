@@ -124,18 +124,31 @@ def export_rknn(onnx_path: str, rknn_path: str,
 
     # INT8 量化校准
     if quantize and calib_dir:
+        import cv2
         print(f"[RKNN] Running INT8 calibration with: {calib_dir}")
         calib_images = []
-        for fname in os.listdir(calib_dir)[:200]:
-            if fname.endswith(('.jpg', '.png', '.jpeg')):
+        for fname in sorted(os.listdir(calib_dir))[:200]:
+            if fname.lower().endswith(('.jpg', '.jpeg', '.png')):
                 calib_images.append(os.path.join(calib_dir, fname))
 
         if calib_images:
-            # 加载校准图像并推理
-            for img_path in calib_images[:100]:
-                # 实际校准需要按模型输入尺寸预处理图像
-                pass
-            print(f"[RKNN] Calibration done with {len(calib_images)} images")
+            # 加载校准图像并执行推理以收集量化统计信息
+            for idx, img_path in enumerate(calib_images[:100]):
+                img = cv2.imread(img_path)
+                if img is None:
+                    continue
+                # 按模型输入尺寸预处理 (LetterBox)
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                img = cv2.resize(img, (640, 640))
+                img = img.astype(np.float32) / 255.0
+                img = np.expand_dims(img, axis=0)
+                # 执行推理以收集量化统计
+                rknn.inference(inputs=[img])
+                if (idx + 1) % 20 == 0:
+                    print(f"  Calibration progress: {idx + 1}/{len(calib_images[:100])}")
+            print(f"[RKNN] Calibration done with {len(calib_images[:100])} images")
+        else:
+            print("[RKNN] WARNING: No calibration images found, INT8 accuracy may be poor")
 
     # 导出
     print(f"[RKNN] Exporting to: {rknn_path}")

@@ -16,7 +16,7 @@
  */
 
 #include "pipeline/pipeline_config.h"
-#include "pipeline/pipeline.cpp"  /* 流水线实现 */
+#include "pipeline/pipeline.h"  /* 流水线入口声明 */
 
 #include <cstdio>
 #include <cstdlib>

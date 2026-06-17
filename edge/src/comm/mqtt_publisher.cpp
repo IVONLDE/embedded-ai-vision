@@ -62,7 +62,9 @@ static void on_disconnect(struct mosquitto *mosq, void *obj, int rc)
 
 static void on_publish(struct mosquitto *mosq, void *obj, int mid)
 {
-    /* 发布成功回调 (QoS 1/2 时有用) */
+    /* QoS 1/2 发布确认回调 — 记录 mid 用于重传跟踪 */
+    MqttPublisher *self = static_cast<MqttPublisher *>(obj);
+    self->_last_published_mid = mid;
 }
 
 static void on_message(struct mosquitto *mosq, void *obj,
@@ -284,14 +286,21 @@ void MqttPublisher::handle_command(const char *topic,
 
     printf("[MQTT] Command received: %s\n", msg.c_str());
 
-    /* 解析 JSON 指令 (简化, 生产环境用 Protobuf) */
-    if (msg.find("switch_scene") != std::string::npos) {
+    /* 解析 JSON 指令 (简化, 生产环境用 Protobuf/cJSON)
+     * 查找 JSON key "cmd": "xxx" 以避免子串误匹配 */
+    auto find_cmd = [&msg](const char *cmd) -> bool {
+        /* 使用精确 JSON key 匹配, 避免 payload 内容误触发 */
+        std::string key = "\"cmd\":\"" + std::string(cmd) + "\"";
+        return msg.find(key) != std::string::npos;
+    };
+
+    if (find_cmd("switch_scene")) {
         printf("[MQTT] Scene switch requested\n");
         /* 触发场景切换回调 */
-    } else if (msg.find("reload_model") != std::string::npos) {
+    } else if (find_cmd("reload_model")) {
         printf("[MQTT] Model reload requested\n");
         /* 触发模型热加载回调 */
-    } else if (msg.find("restart") != std::string::npos) {
+    } else if (find_cmd("restart")) {
         printf("[MQTT] Restart requested\n");
         /* 触发优雅重启 */
     }
