@@ -108,8 +108,9 @@ ApplicationWindow {
                 ListElement { isHeader: false; name: "数据生成"; source: "views/SampleGenView.qml"; icon: "⚡" }
                 ListElement { isHeader: false; name: "数据清洗"; source: "views/DataCleanView.qml"; icon: "🧹" }
                 ListElement { isHeader: false; name: "多专业智能应用仿真模型"; source: "views/EvaluateView.qml"; icon: "📈" }
-
-
+                // 边缘设备管理
+                ListElement { isHeader: false; name: "边缘设备管理"; source: "views/EdgeDeviceView.qml"; icon: "📡" }
+                // 算法与参数配置
                 ListElement { isHeader: false; name: "算法与参数配置"; source: "views/AlgoConfigView.qml"; icon: "🧩" }
                 // 系统
                 ListElement { isHeader: false; name: "系统设置"; source: "views/SystemSettingsView.qml"; icon: "⚙" }
@@ -230,11 +231,11 @@ Component {
         property bool page0Loaded: true
         property bool page1Loaded: false; property bool page2Loaded: false
         property bool page3Loaded: false; property bool page4Loaded: false
-        property bool page5Loaded: false
+        property bool page5Loaded: false; property bool page6Loaded: false
         function markLoaded(idx) {
             if (idx===1) page1Loaded=true; else if (idx===2) page2Loaded=true
             else if (idx===3) page3Loaded=true; else if (idx===4) page4Loaded=true
-            else if (idx===5) page5Loaded=true
+            else if (idx===5) page5Loaded=true; else if (idx===6) page6Loaded=true
         }
 
         StackLayout {
@@ -248,8 +249,9 @@ Component {
             Loader { source: "views/SampleGenView.qml";    active: mainContentArea.page1Loaded;          asynchronous: true }
             Loader { source: "views/DataCleanView.qml";    active: mainContentArea.page2Loaded;          asynchronous: true }
             Loader { source: "views/EvaluateView.qml";     active: true;          asynchronous: true }
-            Loader { source: "views/AlgoConfigView.qml";   active: mainContentArea.page4Loaded;          asynchronous: true }
-            Loader { source: "views/SystemSettingsView.qml"; active: mainContentArea.page5Loaded;        asynchronous: true }
+            Loader { source: "views/EdgeDeviceView.qml";   active: mainContentArea.page4Loaded;          asynchronous: true }
+            Loader { source: "views/AlgoConfigView.qml";   active: mainContentArea.page5Loaded;          asynchronous: true }
+            Loader { source: "views/SystemSettingsView.qml"; active: mainContentArea.page6Loaded;        asynchronous: true }
         }
     }
 }

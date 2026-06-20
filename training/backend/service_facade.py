@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from ._compat import slots_dataclass
 
-from .repositories import AlgorithmRepository, DatasetRepository, LogRepository, SettingsRepository, TaskRepository
+from .repositories import (
+    AlgorithmRepository,
+    DatasetRepository,
+    EdgeDeviceRepository,
+    LogRepository,
+    ModelVersionRepository,
+    SettingsRepository,
+    TaskRepository,
+)
 from .services import (
     AlgorithmService,
     CleaningService,
@@ -27,6 +35,8 @@ class BackendServiceFacade:
     algorithm_repository: AlgorithmRepository
     settings_repository: SettingsRepository
     log_repository: LogRepository
+    edge_device_repository: EdgeDeviceRepository
+    model_version_repository: ModelVersionRepository
     task_manager: TaskManager
     dataset_service: DatasetService
     cleaning_service: CleaningService
@@ -45,6 +55,8 @@ class BackendServiceFacade:
         algorithm_repository = AlgorithmRepository(session_factory)
         settings_repository = SettingsRepository(session_factory)
         log_repository = LogRepository(session_factory)
+        edge_device_repository = EdgeDeviceRepository(session_factory)
+        model_version_repository = ModelVersionRepository(session_factory)
         task_manager = TaskManager(paths=paths, session_factory=session_factory, task_repository=task_repository, log_repository=log_repository)
         dataset_service = DatasetService(paths=paths, session_factory=session_factory, dataset_repository=dataset_repository, log_repository=log_repository)
         cleaning_service = CleaningService(
@@ -82,7 +94,13 @@ class BackendServiceFacade:
         algorithm_service = AlgorithmService(paths=paths, session_factory=session_factory, algorithm_repository=algorithm_repository, log_repository=log_repository)
         settings_service = SettingsService(paths=paths, session_factory=session_factory, settings_repository=settings_repository, log_repository=log_repository)
         export_service = ExportService(paths=paths, session_factory=session_factory, algorithm_repository=algorithm_repository, log_repository=log_repository)
-        edge_service = EdgeService(paths=paths, session_factory=session_factory, log_repository=log_repository)
+        edge_service = EdgeService(
+            paths=paths,
+            session_factory=session_factory,
+            log_repository=log_repository,
+            edge_device_repository=edge_device_repository,
+            model_version_repository=model_version_repository,
+        )
         return cls(
             paths=paths,
             session_factory=session_factory,
@@ -91,6 +109,8 @@ class BackendServiceFacade:
             algorithm_repository=algorithm_repository,
             settings_repository=settings_repository,
             log_repository=log_repository,
+            edge_device_repository=edge_device_repository,
+            model_version_repository=model_version_repository,
             task_manager=task_manager,
             dataset_service=dataset_service,
             cleaning_service=cleaning_service,

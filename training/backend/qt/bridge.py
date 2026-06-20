@@ -579,6 +579,98 @@ class BackendBridge:
         except Exception as exc:
             return _normalize_error(exc)
 
+    # ── 边缘设备管理 + OTA ──────────────────────────────────
+
+    def register_edge_device(self, device_id: str, name: str, host: str,
+                             grpc_port: int = 50051, tags: dict = None) -> dict:
+        try:
+            return self.facade.edge_service.register_device(
+                device_id, name, host, grpc_port, tags
+            )
+        except Exception as exc:
+            return _normalize_error(exc)
+
+    def get_edge_device(self, device_id: str) -> dict:
+        try:
+            return self.facade.edge_service.get_device(device_id)
+        except Exception as exc:
+            return _normalize_error(exc)
+
+    def list_edge_devices(self, status: str = "") -> list[dict]:
+        try:
+            return self.facade.edge_service.list_devices(status or None)
+        except Exception:
+            return []
+
+    def unregister_edge_device(self, device_id: str) -> dict:
+        try:
+            return self.facade.edge_service.unregister_device(device_id)
+        except Exception as exc:
+            return _normalize_error(exc)
+
+    def switch_device_scene(self, device_id: str, scene: str) -> dict:
+        try:
+            return self.facade.edge_service.switch_scene(device_id, scene)
+        except Exception as exc:
+            return _normalize_error(exc)
+
+    def push_model_to_device(self, device_id: str, model_path: str,
+                             model_version: str = "") -> dict:
+        try:
+            return self.facade.edge_service.push_model(
+                device_id, model_path, model_version=model_version or None
+            )
+        except Exception as exc:
+            return _normalize_error(exc)
+
+    def deploy_model_to_devices(self, model_path: str, device_ids: list,
+                                model_version: str = "") -> dict:
+        try:
+            return self.facade.edge_service.deploy_to_devices(
+                model_path, device_ids, model_version=model_version or None
+            )
+        except Exception as exc:
+            return _normalize_error(exc)
+
+    def rollback_device(self, device_id: str, target: str = "model") -> dict:
+        try:
+            return self.facade.edge_service.rollback(device_id, target)
+        except Exception as exc:
+            return _normalize_error(exc)
+
+    def restart_device(self, device_id: str) -> dict:
+        try:
+            return self.facade.edge_service.restart_device(device_id)
+        except Exception as exc:
+            return _normalize_error(exc)
+
+    def register_model_version(self, name: str, version: str,
+                               model_type: str, scene: str,
+                               file_path: str, quantization: str = "fp16",
+                               notes: str = "") -> dict:
+        try:
+            return self.facade.edge_service.register_model_version(
+                name=name, version=version, model_type=model_type,
+                scene=scene, file_path=file_path,
+                quantization=quantization, notes=notes,
+            )
+        except Exception as exc:
+            return _normalize_error(exc)
+
+    def list_model_versions(self, scene: str = "", model_type: str = "") -> list[dict]:
+        try:
+            return self.facade.edge_service.list_model_versions(
+                scene=scene or None, model_type=model_type or None
+            )
+        except Exception:
+            return []
+
+    def on_device_heartbeat(self, device_id: str, telemetry: dict) -> dict:
+        try:
+            return self.facade.edge_service.on_heartbeat(device_id, telemetry)
+        except Exception as exc:
+            return _normalize_error(exc)
+
 
     def _normalize_modality(self, modality: str) -> str:
         return {

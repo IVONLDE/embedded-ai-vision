@@ -70,6 +70,11 @@ class BackendService(QObject):
     settingsUpdated = Signal(dict)
     operationLogsUpdated = Signal(dict)
 
+    # ── 边缘设备管理 + OTA ──────────────────────────────
+    edgeDevicesUpdated = Signal(list)
+    edgeDeviceOperationCompleted = Signal(dict)
+    modelVersionsUpdated = Signal(list)
+
     def __init__(self):
         super().__init__()
         self._bridge = _build_backend()
@@ -482,6 +487,85 @@ class BackendService(QObject):
     @Slot(int, int, str)
     def getOperationLogs(self, page: int, pageSize: int, resourceType: str):
         self.operationLogsUpdated.emit(self._bridge.get_operation_logs(page, pageSize, resourceType))
+
+    # ── 边缘设备管理 + OTA Slots ───────────────────────────
+
+    @Slot(str, str, str, int, result=dict)
+    @Slot(str, str, str, int, result="QVariant")
+    def registerEdgeDevice(self, deviceId: str, name: str, host: str, grpcPort: int = 50051) -> dict:
+        result = self._bridge.register_edge_device(deviceId, name, host, grpcPort)
+        self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+        return result
+
+    @Slot(str, result=dict)
+    def getEdgeDevice(self, deviceId: str) -> dict:
+        return self._bridge.get_edge_device(deviceId)
+
+    @Slot(str, result=list)
+    def listEdgeDevices(self, status: str) -> list:
+        return self._bridge.list_edge_devices(status)
+
+    @Slot(str, result=dict)
+    def unregisterEdgeDevice(self, deviceId: str) -> dict:
+        result = self._bridge.unregister_edge_device(deviceId)
+        self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+        return result
+
+    @Slot(str, str, result=dict)
+    def switchDeviceScene(self, deviceId: str, scene: str) -> dict:
+        def worker():
+            result = self._bridge.switch_device_scene(deviceId, scene)
+            self.edgeDeviceOperationCompleted.emit(result)
+            self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+        threading.Thread(target=worker, daemon=True).start()
+        return {"status": "pending", "message": "切换场景中..."}
+
+    @Slot(str, str, str, result=dict)
+    def pushModelToDevice(self, deviceId: str, modelPath: str, modelVersion: str) -> dict:
+        def worker():
+            result = self._bridge.push_model_to_device(deviceId, modelPath, modelVersion)
+            self.edgeDeviceOperationCompleted.emit(result)
+            self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+        threading.Thread(target=worker, daemon=True).start()
+        return {"status": "pending", "message": "推送模型中..."}
+
+    @Slot(str, str, result=dict)
+    def rollbackDevice(self, deviceId: str, target: str) -> dict:
+        def worker():
+            result = self._bridge.rollback_device(deviceId, target)
+            self.edgeDeviceOperationCompleted.emit(result)
+            self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+        threading.Thread(target=worker, daemon=True).start()
+        return {"status": "pending", "message": "回滚中..."}
+
+    @Slot(str, result=dict)
+    def restartDevice(self, deviceId: str) -> dict:
+        def worker():
+            result = self._bridge.restart_device(deviceId)
+            self.edgeDeviceOperationCompleted.emit(result)
+            self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+        threading.Thread(target=worker, daemon=True).start()
+        return {"status": "pending", "message": "重启中..."}
+
+    @Slot(str, str, str, str, str, str, str, result=dict)
+    def registerModelVersion(self, name: str, version: str, modelType: str,
+                              scene: str, filePath: str, quantization: str = "fp16",
+                              notes: str = "") -> dict:
+        result = self._bridge.register_model_version(
+            name, version, modelType, scene, filePath, quantization, notes
+        )
+        self.modelVersionsUpdated.emit(self._bridge.list_model_versions("", ""))
+        return result
+
+    @Slot(str, str, result=list)
+    def listModelVersions(self, scene: str, modelType: str) -> list:
+        return self._bridge.list_model_versions(scene, modelType)
+
+    @Slot(str, dict, result=dict)
+    def onDeviceHeartbeat(self, deviceId: str, telemetry: dict) -> dict:
+        result = self._bridge.on_device_heartbeat(deviceId, telemetry)
+        self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+        return result
 
 
 

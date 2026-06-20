@@ -40,6 +40,9 @@ pkg_check_modules(MOSQUITTO mosquitto)
 # systemd (systemd notify/watchdog)
 pkg_check_modules(LIBSYSTEMD libsystemd)
 
+# OpenSSL (SHA256 校验, OTA)
+find_package(OpenSSL QUIET)
+
 # gRPC + Protobuf
 find_package(Protobuf QUIET)
 find_package(gRPC QUIET)
@@ -99,6 +102,7 @@ set(IO_SOURCES
 set(COMM_SOURCES
     src/comm/mqtt_publisher.cpp
     src/comm/grpc_server.cpp
+    src/comm/ota_manager.cpp
 )
 
 set(PIPELINE_SOURCES
@@ -130,6 +134,7 @@ target_link_libraries(edge-ai-camera
     ${MOSQUITTO_LIBRARIES}
     ${YAMLCPP_LIBRARIES}
     ${LIBSYSTEMD_LIBRARIES}
+    OpenSSL::Crypto
 )
 
 # 可选: gRPC (仅在有 protobuf 时链接)

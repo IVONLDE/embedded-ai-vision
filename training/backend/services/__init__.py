@@ -8,6 +8,8 @@ from .settings_service import SettingsService
 from .training_service import TrainingService
 from .edge_service import EdgeService
 
+from .edge_service import EdgeService
+
 __all__ = [
     "AlgorithmService",
     "CleaningService",

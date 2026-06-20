@@ -2,28 +2,28 @@
 """
 Edge Device RPC Client — 边缘设备通信客户端
 
-通过 SSH + UNIX Domain Socket 与边缘设备的 gRPC/JSON-RPC 服务通信。
-
-协议:
-  - 边缘设备: edge/src/comm/grpc_server.cpp (JSON-RPC over UNIX socket)
-  - PC 端通过 SSH 隧道访问边缘设备的 UNIX socket
+通信方式 (按优先级):
+  1. gRPC 直连 (高性能, 推荐生产环境)
+  2. SSH + JSON-RPC (兼容模式, 开发调试用)
 
 用法:
     from backend.edge_client import EdgeClient
 
-    client = EdgeClient("192.168.1.50", ssh_user="root")
+    client = EdgeClient("192.168.1.50", grpc_port=50051)
     status = client.get_status()
     client.switch_scene("vehicle")
-    client.push_model("/path/to/model.rknn")
+    client.push_model("/path/to/model.rknn", model_version="v2.0")
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import os
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -33,76 +33,111 @@ class DeviceStatus:
     device_id: str = ""
     scene: str = ""
     model: str = ""
+    model_version: str = ""
     status: str = "unknown"
-    conf_threshold: float = 0.3
-    nms_threshold: float = 0.45
-    mqtt_enabled: bool = False
-    grpc_enabled: bool = False
+    fps: float = 0.0
+    npu_usage: float = 0.0
+    cpu_temp: float = 0.0
+    memory_bytes: int = 0
+    uptime_sec: int = 0
+    frame_count: int = 0
+    avg_inference_ms: float = 0.0
+    app_version: str = ""
+    rollback_available: bool = False
     raw: dict = None
 
     @classmethod
     def from_response(cls, data: dict) -> "DeviceStatus":
-        device = data.get("device", {})
         return cls(
-            device_id=device.get("device_id", ""),
-            scene=device.get("scene", ""),
-            model=device.get("model", ""),
-            status=device.get("status", "unknown"),
-            conf_threshold=device.get("conf_threshold", 0.3),
-            nms_threshold=device.get("nms_threshold", 0.45),
-            mqtt_enabled=device.get("mqtt_enabled", False),
-            grpc_enabled=device.get("grpc_enabled", False),
-            raw=device,
+            device_id=data.get("device_id", ""),
+            scene=data.get("scene", ""),
+            model=data.get("model", ""),
+            model_version=data.get("model_version", ""),
+            status=data.get("status", "unknown"),
+            fps=data.get("fps", 0.0),
+            npu_usage=data.get("npu_usage", 0.0),
+            cpu_temp=data.get("cpu_temp", 0.0),
+            memory_bytes=data.get("memory_bytes", 0),
+            uptime_sec=data.get("uptime_sec", 0),
+            frame_count=data.get("frame_count", 0),
+            avg_inference_ms=data.get("avg_inference_ms", 0.0),
+            app_version=data.get("app_version", ""),
+            rollback_available=data.get("rollback_available", False),
+            raw=data,
         )
+
+
+@dataclass
+class OtaResult:
+    """OTA 操作结果"""
+    status: int = -1         # 0=成功, -1=失败, 2=需重启
+    message: str = ""
+    version: str = ""
+    previous_version: str = ""
+    needs_restart: bool = False
 
 
 class EdgeClient:
     """
-    边缘设备 JSON-RPC 客户端
+    边缘设备通信客户端
 
-    通过 SSH 连接边缘设备，发送 JSON-RPC 请求到 UNIX socket。
-
-    支持的 RPC 方法:
-      - PushModel:    推送模型文件
-      - SwitchScene:  切换推理场景
-      - GetStatus:    查询设备状态
-      - UpdateConfig: 更新运行时参数
-      - Restart:      远程重启
+    支持 gRPC 直连和 SSH+JSON-RPC 两种模式。
     """
 
     def __init__(self, host: str, ssh_user: str = "root",
+                 grpc_port: int = 50051,
                  socket_path: str = "/tmp/edge-ai-grpc.sock",
-                 ssh_timeout: int = 10):
+                 ssh_timeout: int = 10,
+                 use_grpc: bool = False):
+        """
+        Args:
+            host: 设备 IP 地址
+            ssh_user: SSH 用户名
+            grpc_port: gRPC 端口
+            socket_path: UNIX socket 路径
+            ssh_timeout: SSH 连接超时(秒)
+            use_grpc: 是否尝试 gRPC 直连
+        """
         self._host = host
         self._ssh_user = ssh_user
+        self._grpc_port = grpc_port
         self._socket_path = socket_path
         self._ssh_timeout = ssh_timeout
+        self._use_grpc = use_grpc
+        self._grpc_channel = None
 
-    # ── 发送 JSON-RPC 请求 ─────────────────────────────────
+    # ── gRPC 直连 (可选) ──────────────────────────────────
+    def _init_grpc(self):
+        """初始化 gRPC 通道 (需要 grpcio 库)"""
+        if self._grpc_channel:
+            return True
+        try:
+            import grpc
+            target = f"{self._host}:{self._grpc_port}"
+            self._grpc_channel = grpc.insecure_channel(target)
+            # 尝试连接
+            grpc.channel_ready_future(self._grpc_channel).result(timeout=5)
+            return True
+        except Exception:
+            self._grpc_channel = None
+            return False
+
+    # ── SSH + JSON-RPC 通信 ─────────────────────────────────
     def _call(self, method: str, params: dict = None) -> dict:
-        """
-        通过 SSH 发送 JSON-RPC 请求到边缘设备 UNIX socket。
-
-        命令:
-          echo '<json>' | nc -U /tmp/edge-ai-grpc.sock -W 5
-        """
+        """通过 SSH 发送 JSON-RPC 请求到边缘设备"""
         request = {
             "method": method,
             "params": params or {},
         }
         json_str = json.dumps(request, ensure_ascii=False)
 
-        # 通过 SSH 执行 nc 连接到 UNIX socket
         cmd = [
             "ssh",
-            "-o", "ConnectTimeout={}".format(self._ssh_timeout),
+            "-o", f"ConnectTimeout={self._ssh_timeout}",
             "-o", "StrictHostKeyChecking=no",
             "-o", "BatchMode=no",
-            "{}@{}".format(self._ssh_user, self._host),
-            "echo '{}' | nc -U {} -W 5".format(
-                json_str.replace("'", "'\\''"),
-                self._socket_path,
-            ),
+            f"{self._ssh_user}@{self._host}",
+            f"echo '{json_str.replace(chr(39), chr(39) + chr(92) + chr(39))}' | nc -U {self._socket_path} -W 5",
         ]
 
         try:
@@ -136,6 +171,29 @@ class EdgeClient:
         except Exception as e:
             return {"status": -1, "message": str(e)}
 
+    def _scp(self, local_path: str, remote_path: str) -> dict:
+        """SCP 文件传输"""
+        try:
+            result = subprocess.run(
+                [
+                    "scp",
+                    "-o", f"ConnectTimeout={self._ssh_timeout}",
+                    "-o", "StrictHostKeyChecking=no",
+                    local_path,
+                    f"{self._ssh_user}@{self._host}:{remote_path}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=self._ssh_timeout + 30,
+            )
+            if result.returncode != 0:
+                return {"status": -1, "message": f"SCP failed: {result.stderr.strip()[:200]}"}
+            return {"status": 0, "message": "ok"}
+        except subprocess.TimeoutExpired:
+            return {"status": -1, "message": "SCP timed out"}
+        except Exception as e:
+            return {"status": -1, "message": f"SCP error: {e}"}
+
     # ── GetStatus ──────────────────────────────────────────
     def get_status(self) -> DeviceStatus:
         """查询边缘设备运行状态"""
@@ -144,91 +202,72 @@ class EdgeClient:
             return DeviceStatus.from_response(resp)
         return DeviceStatus(status="error", raw=resp)
 
+    # ── GetVersionInfo (OTA) ───────────────────────────────
+    def get_version_info(self) -> dict:
+        """查询设备版本信息 (OTA)"""
+        return self._call("GetVersionInfo")
+
     # ── SwitchScene ────────────────────────────────────────
     def switch_scene(self, scene_name: str) -> dict:
-        """
-        切换推理场景
-
-        Args:
-            scene_name: 场景名称 (face / body / vehicle / defect)
-
-        Returns:
-            {"status": 0, "message": "ok"} 或 {"status": -1, "message": "..."}
-        """
+        """切换推理场景"""
         valid_scenes = {"face", "body", "vehicle", "defect"}
         if scene_name not in valid_scenes:
             return {"status": -1, "message": f"Invalid scene: {scene_name}"}
-
         return self._call("SwitchScene", {"scene_name": scene_name})
 
     # ── PushModel ─────────────────────────────────────────
-    def push_model(self, model_path: str, model_name: str = None) -> dict:
+    def push_model(self, model_path: str, model_name: str = None,
+                   model_version: str = None,
+                   sha256_checksum: str = None,
+                   auto_rollback: bool = True) -> dict:
         """
-        推送模型文件到边缘设备 (通过 SCP + JSON-RPC)
+        推送模型到边缘设备 (SCP + JSON-RPC)
 
-        分两步:
-          1. SCP 拷贝模型文件到设备
-          2. JSON-RPC 通知设备热加载
+        流程:
+          1. SCP 拷贝模型文件到设备临时目录
+          2. JSON-RPC 通知设备安装模型 (校验+备份+替换+热加载)
 
         Args:
             model_path: 本地模型文件路径
             model_name: 设备上的模型名称 (默认使用文件名)
-
-        Returns:
-            {"status": 0, "message": "ok"} 或错误信息
+            model_version: 模型版本号
+            sha256_checksum: SHA256 校验和 (默认自动计算)
+            auto_rollback: 失败时自动回滚
         """
-        import os
-
         if not os.path.isfile(model_path):
             return {"status": -1, "message": f"Model file not found: {model_path}"}
 
         if model_name is None:
             model_name = os.path.basename(model_path)
 
-        # Step 1: SCP 拷贝
-        remote_path = f"/opt/edge-ai/models/{model_name}"
-        try:
-            scp_result = subprocess.run(
-                [
-                    "scp",
-                    "-o", "ConnectTimeout={}".format(self._ssh_timeout),
-                    "-o", "StrictHostKeyChecking=no",
-                    model_path,
-                    "{}@{}:{}".format(self._ssh_user, self._host, remote_path),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=self._ssh_timeout + 30,
-            )
-            if scp_result.returncode != 0:
-                return {
-                    "status": -1,
-                    "message": f"SCP failed: {scp_result.stderr.strip()[:200]}",
-                }
-        except subprocess.TimeoutExpired:
-            return {"status": -1, "message": "SCP timed out"}
-        except Exception as e:
-            return {"status": -1, "message": f"SCP error: {e}"}
+        # 自动计算 SHA256
+        if sha256_checksum is None:
+            sha256_checksum = self._compute_file_sha256(model_path)
 
-        # Step 2: 通知设备热加载
-        return self._call("PushModel", {"model_name": model_name})
+        # Step 1: SCP 拷贝到设备临时目录
+        remote_path = f"/opt/edge-ai/models/.ota_tmp/{model_name}"
+        scp_result = self._scp(model_path, remote_path)
+        if scp_result.get("status") != 0:
+            return scp_result
+
+        # Step 2: JSON-RPC 通知设备安装
+        return self._call("PushModel", {
+            "model_name": model_name,
+            "model_path": remote_path,
+            "model_version": model_version or "",
+            "sha256": sha256_checksum,
+            "auto_rollback": auto_rollback,
+        })
 
     def push_model_inline(self, model_path: str, model_name: str = None) -> dict:
         """
-        推送模型文件到边缘设备 (base64 内联传输)
-
-        将模型文件编码为 base64 后通过 JSON-RPC 直接传输。
-        适合小模型 (<10MB)，避免 SCP 的两步操作。
-
-        注意: 大模型应使用 push_model() (SCP 方式)。
+        推送模型 (base64 内联传输, 适合小模型 <10MB)
         """
-        import os
-
         if not os.path.isfile(model_path):
             return {"status": -1, "message": f"Model file not found: {model_path}"}
 
         file_size = os.path.getsize(model_path)
-        max_size = 10 * 1024 * 1024  # 10MB
+        max_size = 10 * 1024 * 1024
         if file_size > max_size:
             return {
                 "status": -1,
@@ -249,31 +288,71 @@ class EdgeClient:
             "model_data": model_b64,
         })
 
-    # ── UpdateConfig ───────────────────────────────────────
-    def update_config(self, params: dict) -> dict:
+    # ── AppUpdate (OTA) ────────────────────────────────────
+    def push_app_update(self, app_path: str, app_version: str,
+                        sha256_checksum: str = None,
+                        auto_rollback: bool = True) -> dict:
         """
-        更新运行时配置参数
+        推送应用更新到边缘设备
 
         Args:
-            params: 配置键值对 (如 {"conf_threshold": 0.5, "nms_threshold": 0.3})
-
-        Returns:
-            {"status": 0, "message": "config updated"}
+            app_path: 本地应用二进制文件路径
+            app_version: 新版本号
+            sha256_checksum: SHA256 校验和
+            auto_rollback: 失败时自动回滚
         """
+        if not os.path.isfile(app_path):
+            return {"status": -1, "message": f"App file not found: {app_path}"}
+
+        if sha256_checksum is None:
+            sha256_checksum = self._compute_file_sha256(app_path)
+
+        # SCP 拷贝到设备临时目录
+        remote_path = "/opt/edge-ai/.ota_tmp/edge-ai-camera"
+        scp_result = self._scp(app_path, remote_path)
+        if scp_result.get("status") != 0:
+            return scp_result
+
+        return self._call("PushAppUpdate", {
+            "app_path": remote_path,
+            "app_version": app_version,
+            "sha256": sha256_checksum,
+            "auto_rollback": auto_rollback,
+        })
+
+    # ── Rollback (OTA) ─────────────────────────────────────
+    def rollback(self, target: str = "model") -> dict:
+        """
+        回滚到上一版本
+
+        Args:
+            target: "model" 或 "app"
+        """
+        return self._call("Rollback", {"target": target})
+
+    # ── UpdateConfig ───────────────────────────────────────
+    def update_config(self, params: dict) -> dict:
+        """更新运行时配置参数"""
         return self._call("UpdateConfig", params)
 
     # ── Restart ────────────────────────────────────────────
     def restart(self) -> dict:
-        """
-        远程重启边缘设备推理服务
-
-        注意: 此操作会中断推理服务 ~5-10 秒。
-        systemd 会自动重启进程。
-        """
+        """远程重启边缘设备推理服务"""
         return self._call("Restart")
 
+    # ── 工具方法 ────────────────────────────────────────────
 
-# ── CLI 入口 (用于脚本直接调用) ──────────────────────────
+    @staticmethod
+    def _compute_file_sha256(path: str) -> str:
+        """计算文件 SHA256"""
+        sha256 = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha256.update(chunk)
+        return sha256.hexdigest()
+
+
+# ── CLI 入口 ──────────────────────────────────────────────
 if __name__ == "__main__":
     import sys
 
@@ -282,15 +361,13 @@ if __name__ == "__main__":
         print()
         print("Commands:")
         print("  status                                    Query device status")
-        print("  scene <name>                              Switch scene (face/body/vehicle/defect)")
+        print("  version                                   Query version info (OTA)")
+        print("  scene <name>                              Switch scene")
         print("  push <model_path> [model_name]            Push model (SCP)")
+        print("  push-app <app_path> <version>             Push app update (OTA)")
+        print("  rollback [model|app]                      Rollback to previous version")
         print("  config <key>=<value> [<key>=<value>...]   Update config")
         print("  restart                                   Restart inference service")
-        print()
-        print("Example:")
-        print("  python edge_client.py 192.168.1.50 status")
-        print("  python edge_client.py 192.168.1.50 scene vehicle")
-        print("  python edge_client.py 192.168.1.50 push yolov5n.rknn")
         sys.exit(1)
 
     host = sys.argv[1]
@@ -299,21 +376,26 @@ if __name__ == "__main__":
 
     if command == "status":
         status = client.get_status()
-        print(f"Device: {status.device_id}")
-        print(f"Status: {status.status}")
-        print(f"Scene:  {status.scene}")
-        print(f"Model:  {status.model}")
-        print(f"Conf threshold: {status.conf_threshold}")
-        print(f"NMS threshold:  {status.nms_threshold}")
-        print(f"MQTT:   {status.mqtt_enabled}")
-        print(f"gRPC:   {status.grpc_enabled}")
+        print(f"Device:    {status.device_id}")
+        print(f"Status:    {status.status}")
+        print(f"Scene:     {status.scene}")
+        print(f"Model:     {status.model}")
+        print(f"Version:   {status.model_version}")
+        print(f"App:       {status.app_version}")
+        print(f"FPS:       {status.fps}")
+        print(f"NPU:       {status.npu_usage}%")
+        print(f"CPU Temp:  {status.cpu_temp}°C")
+        print(f"Rollback:  {'available' if status.rollback_available else 'none'}")
+
+    elif command == "version":
+        info = client.get_version_info()
+        print(json.dumps(info, indent=2))
 
     elif command == "scene":
         if len(sys.argv) < 4:
             print("Usage: python edge_client.py <host> scene <name>")
             sys.exit(1)
-        scene_name = sys.argv[3]
-        resp = client.switch_scene(scene_name)
+        resp = client.switch_scene(sys.argv[3])
         print(json.dumps(resp, indent=2))
 
     elif command == "push":
@@ -324,6 +406,22 @@ if __name__ == "__main__":
         model_name = sys.argv[4] if len(sys.argv) > 4 else None
         print(f"Pushing model: {model_path}...")
         resp = client.push_model(model_path, model_name)
+        print(json.dumps(resp, indent=2))
+
+    elif command == "push-app":
+        if len(sys.argv) < 5:
+            print("Usage: python edge_client.py <host> push-app <app_path> <version>")
+            sys.exit(1)
+        app_path = sys.argv[3]
+        version = sys.argv[4]
+        print(f"Pushing app: {app_path} v{version}...")
+        resp = client.push_app_update(app_path, version)
+        print(json.dumps(resp, indent=2))
+
+    elif command == "rollback":
+        target = sys.argv[3] if len(sys.argv) > 3 else "model"
+        print(f"Rolling back {target}...")
+        resp = client.rollback(target)
         print(json.dumps(resp, indent=2))
 
     elif command == "config":

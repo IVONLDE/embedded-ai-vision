@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * MQTT Publisher — Header
+ * MQTT Publisher — 检测结果上报 + 指令接收
+ *
+ * 基于 libmosquitto, 支持 QoS 0/1/2。
+ * 指令通过 CommandCallback 转发到业务层 (ota_manager),
+ * 本模块只负责通信, 不包含业务逻辑。
  */
 
 #ifndef MQTT_PUBLISHER_H
@@ -11,19 +15,6 @@
 #include <functional>
 #include "detect_box.h"
 
-/*
- * MqttPublisher — MQTT 检测结果上报
- *
- * 基于 libmosquitto, 支持 QoS 0/1/2。
- * 提供 Protobuf/JSON 两种序列化方式。
- *
- * 使用方式:
- *   MqttPublisher mqtt;
- *   mqtt.connect("192.168.1.100", 1883, "device-id", 60);
- *   mqtt.publish_detections("edge/device/detections", boxes, frame_idx, ts);
- *   mqtt.publish_health("edge/device/health", frame_idx);
- *   mqtt.disconnect();
- */
 class MqttPublisher {
 public:
     MqttPublisher();
@@ -39,9 +30,13 @@ public:
 
     bool publish_health(const std::string &topic, int frame_index);
 
+    /* 发布 OTA 状态上报 */
+    bool publish_ota_status(const std::string &topic,
+                            const std::string &status_json);
+
     bool is_connected() const { return _connected; }
 
-    /* 指令回调: 接收 PC 端远程指令 */
+    /* 指令回调: 接收 PC 端远程指令, 转发到 ota_manager */
     using CommandCallback = std::function<void(const char *topic,
                                                const char *payload, int len)>;
     void set_command_callback(CommandCallback cb) {

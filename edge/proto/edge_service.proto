@@ -4,7 +4,7 @@ package edge_ai;
 
 // ── gRPC 服务定义 ────────────────────────────────────────
 service EdgeService {
-  // 推送新模型到边缘设备
+  // 推送新模型到边缘设备 (OTA 模型更新)
   rpc PushModel(ModelRequest) returns (ModelResponse);
 
   // 切换推理场景
@@ -18,6 +18,15 @@ service EdgeService {
 
   // 重启推理服务
   rpc Restart(RestartRequest) returns (RestartResponse);
+
+  // OTA: 查询设备当前版本信息
+  rpc GetVersionInfo(VersionInfoRequest) returns (VersionInfoResponse);
+
+  // OTA: 推送应用二进制更新
+  rpc PushAppUpdate(AppUpdateRequest) returns (AppUpdateResponse);
+
+  // OTA: 回滚到上一版本
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
 }
 
 // ── 模型推送 ─────────────────────────────────────────────
@@ -27,12 +36,14 @@ message ModelRequest {
   string sha256_checksum = 3;    // SHA256 校验和
   string model_name = 4;         // 模型名称
   string model_version = 5;      // 模型版本号
+  bool auto_rollback = 6;        // 失败时自动回滚
 }
 
 message ModelResponse {
   int32 status = 1;              // 0=成功, -1=失败
   string message = 2;            // 状态描述
   string model_version = 3;      // 当前模型版本
+  string previous_version = 4;   // 回滚前的版本 (用于回滚)
 }
 
 // ── 场景切换 ─────────────────────────────────────────────
@@ -64,6 +75,7 @@ message StatusResponse {
   int64 uptime_sec = 9;         // 运行时长
   int32 frame_count = 10;       // 累计帧数
   float avg_inference_ms = 11;  // 平均推理耗时
+  string app_version = 12;      // 应用版本号
 }
 
 // ── 配置更新 ─────────────────────────────────────────────
@@ -85,4 +97,49 @@ message RestartRequest {
 message RestartResponse {
   int32 status = 1;
   string message = 2;
+}
+
+// ── OTA 版本查询 ─────────────────────────────────────────
+message VersionInfoRequest {
+  string device_id = 1;
+}
+
+message VersionInfoResponse {
+  int32 status = 1;
+  string device_id = 2;
+  string app_version = 3;           // 应用版本
+  string model_version = 4;         // 当前模型版本
+  string previous_model_version = 5; // 上一模型版本 (可回滚)
+  string scene = 6;                 // 当前场景
+  int64 uptime_sec = 7;             // 运行时长
+  bool rollback_available = 8;      // 是否可回滚
+}
+
+// ── OTA 应用更新 ─────────────────────────────────────────
+message AppUpdateRequest {
+  string device_id = 1;
+  bytes app_data = 2;               // 应用二进制数据
+  string sha256_checksum = 3;       // SHA256 校验和
+  string app_version = 4;           // 新版本号
+  bool auto_rollback = 5;           // 失败时自动回滚
+}
+
+message AppUpdateResponse {
+  int32 status = 1;                 // 0=成功, -1=失败, 2=需重启
+  string message = 2;
+  string app_version = 3;           // 更新后的版本
+  bool needs_restart = 4;           // 是否需要重启服务
+}
+
+// ── OTA 回滚 ─────────────────────────────────────────────
+message RollbackRequest {
+  string device_id = 1;
+  string target_type = 2;           // "model" 或 "app"
+}
+
+message RollbackResponse {
+  int32 status = 1;
+  string message = 2;
+  string rolled_back_version = 3;   // 回滚到的版本
+  bool needs_restart = 4;           // 是否需要重启
 }
