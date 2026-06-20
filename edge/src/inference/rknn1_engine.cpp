@@ -116,7 +116,7 @@ int Rknn1Engine::load_model(const char *model_path)
 
     /* RKNN1 API: rknn_init
      * 使用 RKNN_FLAG_COLLECT_PERF_MASK 开启性能统计 */
-    ret = rknn_init(&_ctx, model_data, model_len,
+    ret = rknn_init2(&_ctx, model_data, model_len,
                     RKNN_FLAG_COLLECT_PERF_MASK, NULL);
     free(model_data);
 
@@ -223,7 +223,7 @@ int Rknn1Engine::hot_reload_model(const char *new_model_path)
     }
 
     /* 初始化新 context */
-    ret = rknn_init(&new_ctx, model_data, model_len,
+    ret = rknn_init2(&new_ctx, model_data, model_len,
                     RKNN_FLAG_COLLECT_PERF_MASK, NULL);
     free(model_data);
 
@@ -349,11 +349,7 @@ int Rknn1Engine::inference(unsigned char *input_data)
     rknn_input inputs[1];
     memset(inputs, 0, sizeof(inputs));
 
-    int input_size = _input_attrs[0].dims[1] *
-                     _input_attrs[0].dims[2] *
-                     _input_attrs[0].dims[3];
-
-    inputs[0].index = 0;
+    int input_size = _input_attrs[0].dims[0] * _input_attrs[0].dims[1] * _input_attrs[0].dims[2] * _input_attrs[0].dims[3];
     inputs[0].type = RKNN_TENSOR_UINT8;
     inputs[0].size = input_size;
     inputs[0].fmt = RKNN_TENSOR_NHWC;
@@ -472,8 +468,6 @@ const char *Rknn1Engine::get_format_string(rknn_tensor_format fmt)
     switch (fmt) {
     case RKNN_TENSOR_NCHW: return "NCHW";
     case RKNN_TENSOR_NHWC: return "NHWC";
-    case RKNN_TENSOR_NC1HWC2: return "NC1HWC2";
-    case RKNN_TENSOR_UNDEFINED: return "UNDEFINED";
     default: return "UNKNOWN";
     }
 }

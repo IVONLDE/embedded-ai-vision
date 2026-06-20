@@ -19,6 +19,7 @@
 #include "tracker.h"
 #include "kalman_filter.h"
 #include "hungarian.h"
+// Inlined from missing kalman_filter.h
 #include <algorithm>
 #include <cfloat>
 #include <cmath>

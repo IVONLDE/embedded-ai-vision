@@ -33,6 +33,7 @@
 #include <queue>
 #include <thread>
 #include <unistd.h>
+#include <new>
 
 /* ── 全局状态 ──────────────────────────────────────────── */
 static std::atomic<bool> g_running{true};
@@ -134,47 +135,64 @@ static void signal_handler(int sig)
 static void capture_thread_func(const PipelineConfig &cfg,
                                 SpscQueue<FrameData> &frame_queue)
 {
-    printf("[Pipeline] Capture thread started on CPU %d\n",
-           cfg.system.cpu_read);
+    printf("[Pipeline] Capture thread started on CPU %d, input type=%d\n",
+           cfg.system.cpu_read, (int)cfg.input.type);
 
-    /* 绑定 CPU */
     cpu_set_t mask;
     CPU_ZERO(&mask);
     CPU_SET(cfg.system.cpu_read, &mask);
     pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask);
 
-    V4l2Capture capture;
-    if (!capture.open(cfg.input.v4l2_device,
-                      cfg.input.v4l2_width,
-                      cfg.input.v4l2_height,
-                      cfg.input.v4l2_fps)) {
-        std::cerr << "[Pipeline] Failed to open camera" << std::endl;
-        g_running.store(false);
-        return;
-    }
-
     int frame_idx = 0;
-    while (g_running.load()) {
-        FrameData frame;
-        frame.index = frame_idx++;
 
-        /* 从 V4L2 采集一帧 (DMA-BUF 零拷贝) */
-        if (!capture.read_frame(&frame.data, &frame.width,
-                                &frame.height, &frame.timestamp_us)) {
-            std::cerr << "[Pipeline] Failed to read frame" << std::endl;
-            continue;
+    if (cfg.input.type == InputType::V4L2_CAMERA) {
+        V4l2Capture capture;
+        if (!capture.open(cfg.input.v4l2_device,
+                          cfg.input.v4l2_width,
+                          cfg.input.v4l2_height,
+                          cfg.input.v4l2_fps)) {
+            std::cerr << "[Pipeline] Failed to open camera" << std::endl;
+            g_running.store(false);
+            return;
         }
-
-        /* 记录采集对象指针, 用于推理完成后归还缓冲区 */
-        frame.capture = &capture;
-
-        /* 推入队列 (满则阻塞) */
-        while (g_running.load() && !frame_queue.push(frame)) {
-            usleep(1000);  /* 等待消费 */
+        while (g_running.load()) {
+            FrameData frame;
+            frame.index = frame_idx++;
+            if (!capture.read_frame(&frame.data, &frame.width,
+                                    &frame.height, &frame.timestamp_us)) {
+                std::cerr << "[Pipeline] Failed to read frame" << std::endl;
+                continue;
+            }
+            frame.capture = &capture;
+            while (g_running.load() && !frame_queue.push(frame))
+                usleep(1000);
         }
+        capture.close();
+    } else {
+        FileInput file_input;
+        const char *source_path = (cfg.input.type == InputType::RTSP_STREAM)
+            ? cfg.input.rtsp_url.c_str()
+            : cfg.input.file_path.c_str();
+        if (!file_input.open(source_path)) {
+            std::cerr << "[Pipeline] Failed to open input: " << source_path << std::endl;
+            g_running.store(false);
+            return;
+        }
+        while (g_running.load()) {
+            FrameData frame;
+            frame.index = frame_idx++;
+            frame.capture = nullptr;
+            frame.data = nullptr;
+            if (!file_input.read_frame(&frame.data, &frame.width,
+                                       &frame.height, &frame.timestamp_us)) {
+                if (frame.data) delete[] frame.data;
+                break;
+            }
+            while (g_running.load() && !frame_queue.push(frame))
+                usleep(1000);
+        }
+        file_input.close();
     }
-
-    capture.close();
     printf("[Pipeline] Capture thread stopped\n");
 }
 
@@ -198,9 +216,17 @@ static void inference_thread_func(const PipelineConfig &cfg,
     CPU_SET(cfg.system.cpu_inference, &mask);
     pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask);
 
-    /* 初始化 NPU 引擎 */
-    Rknn1Engine engine(cfg.inference.model_path.c_str(),
-                       cfg.system.cpu_inference);
+    /* 推理线程尝试创建 NPU 引擎（如果主线程已创建则失败，但不崩溃） */
+    Rknn1Engine *engine_ptr = nullptr;
+    try {
+        engine_ptr = new Rknn1Engine(cfg.inference.model_path.c_str(),
+                                     cfg.system.cpu_inference);
+        printf("[Pipeline] Inference NPU engine initialized\n");
+    } catch (const std::exception &e) {
+        printf("[Pipeline] Inference NPU engine init skipped: %s\n", e.what());
+    }
+    /* 如果没有成功创建引擎，后续推理会失败但不崩溃 */
+    bool has_inf_engine = (engine_ptr != nullptr);
 
     std::queue<float> perf_history;
     float perf_sum = 0.0;
@@ -222,21 +248,28 @@ static void inference_thread_func(const PipelineConfig &cfg,
         }
 
         /* NPU 推理 */
-        int cost_us = engine.inference(frame.data);
-
-        /* 归还 V4L2 缓冲区 (推理完成后立即归还, 避免耗尽) */
-        if (frame.capture)
-            frame.capture->release_frame();
+        int cost_us = has_inf_engine ? engine_ptr->inference(frame.data) : -1;
 
         if (cost_us < 0) {
             std::cerr << "[Pipeline] Inference failed on frame "
                       << frame.index << std::endl;
+            /* 清理帧数据 */
+            if (frame.capture)
+                frame.capture->release_frame();
+            else if (frame.data)
+                delete[] frame.data;
             continue;
         }
 
+        /* 归还缓冲区 */
+        if (frame.capture)
+            frame.capture->release_frame();
+        else if (frame.data)
+            delete[] frame.data;
+
         /* 性能统计 */
         float cost_ms = cost_us / 1000.0f;
-        float avg_ms = engine.cal_performance(perf_history,
+        float avg_ms = engine_ptr->cal_performance(perf_history,
                                               perf_sum, cost_ms);
 
         /* 后处理 (YOLOv5 decode + NMS) */
@@ -245,9 +278,9 @@ static void inference_thread_func(const PipelineConfig &cfg,
         result.timestamp_us = frame.timestamp_us;
 
         /* 调用 YOLOv5 后处理 (复用现有 decode.cpp 逻辑) */
-        post_process_fp(engine._output_buffs[0],
-                        engine._output_buffs[1],
-                        engine._output_buffs[2],
+        post_process_fp(engine_ptr->_output_buffs[0],
+                        engine_ptr->_output_buffs[1],
+                        engine_ptr->_output_buffs[2],
                         cfg.inference.conf_threshold,
                         cfg.inference.nms_threshold,
                         &result.boxes);
