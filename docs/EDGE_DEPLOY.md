@@ -30,6 +30,43 @@ make -j$(nproc)
 #   - rk3399pro-edge-ai-camera.dtb (设备树)
 ```
 
+## 本地编译 (板子上直接编译)
+
+如果板子上已有系统（Debian 10），可以直接编译 edge 推理引擎：
+
+```bash
+cd edge
+cmake -S . -B build          # 需要 cmake ≥ 3.13
+make -C build -j4
+
+# 编译产物
+./build/edge-ai-camera --help
+```
+
+### 替换 3rdparty rknn_api.h
+
+项目 `3rdparty/librknn_api/include/rknn_api.h` 是占位头文件，
+编译前建议替换为系统安装的真实 Rockchip API 头文件：
+
+```bash
+cp /usr/include/rockchip/rknn_api.h edge/3rdparty/librknn_api/include/
+```
+
+真实头文件 (360 字节 `rknn_tensor_attr`) 与占位符 (124 字节) 的结构体
+布局不同，使用占位符会导致 `rknn_query` 返回 size 不匹配错误。
+
+### 无摄像头测试模式
+
+配置 `type: "video_file"` 可从本地图片/视频文件读取帧：
+
+```yaml
+input:
+  type: "video_file"                     # v4l2_camera / video_file / rtsp_stream
+  file_path: "/opt/edge-ai/models/dog_640.jpg"
+```
+
+支持单张图片 (OpenCV VideoCapture 读取为 1 帧) 和 mp4 视频文件。
+
 ## 烧写 SD 卡
 
 ```bash

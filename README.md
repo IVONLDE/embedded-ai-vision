@@ -232,6 +232,26 @@ python main.py
 
 ### 边缘端 (推理部署)
 
+```bash
+cd edge
+cmake -S . -B build          # 需要 cmake ≥ 3.13
+make -C build -j4
+```
+
+#### 运行模式
+
+**有摄像头 (V4L2):**
+```bash
+./build/edge-ai-camera -c /opt/edge-ai/config/pipeline.yaml
+```
+
+**无摄像头 (文件输入测试):**
+```bash
+# 修改配置文件 type 为 video_file
+sed -i 's/v4l2_camera/video_file/' /opt/edge-ai/config/pipeline.yaml
+./build/edge-ai-camera -c /opt/edge-ai/config/pipeline.yaml
+```
+
 详见 `docs/EDGE_DEPLOY.md`
 
 ## 依赖
