@@ -1,10 +1,11 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.13)
 project(edge-ai-camera VERSION 1.0.0 LANGUAGES CXX)
 
 # C++17 标准
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+find_package(PkgConfig REQUIRED)
 
 # 交叉编译 (AArch64)
 # 用法: cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/aarch64-toolchain.cmake ..
@@ -47,9 +48,9 @@ find_package(gRPC QUIET)
 find_package(Threads REQUIRED)
 
 # ── RKNN API (从 3rdparty 目录) ──────────────────────────
-set(RKNN_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../3rdparty/librknn_api/include"
+set(RKNN_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/3rdparty/librknn_api/include"
     CACHE PATH "RKNN API include directory")
-set(RKNN_LIB_DIR "${CMAKE_SOURCE_DIR}/../3rdparty/librknn_api/aarch64"
+set(RKNN_LIB_DIR "${CMAKE_SOURCE_DIR}/3rdparty/librknn_api/aarch64"
     CACHE PATH "RKNN API library directory")
 
 # 检查 RKNN 头文件是否存在
@@ -101,6 +102,7 @@ set(COMM_SOURCES
 )
 
 set(PIPELINE_SOURCES
+    src/pipeline/pipeline_config.cpp
     src/pipeline/pipeline.cpp
 )
 
@@ -121,6 +123,7 @@ add_executable(edge-ai-camera ${ALL_SOURCES})
 
 # ── 链接库 ────────────────────────────────────────────────
 target_link_libraries(edge-ai-camera
+    PRIVATE mosquitto yaml-cpp
     PRIVATE
     Threads::Threads
     ${OpenCV_LIBS}
@@ -131,12 +134,14 @@ target_link_libraries(edge-ai-camera
 
 # 可选: gRPC (仅在有 protobuf 时链接)
 if(Protobuf_FOUND AND gRPC_FOUND)
-    target_link_libraries(edge-ai-camera PRIVATE ${Protobuf_LIBRARIES} gRPC::grpc++)
+    target_link_libraries(edge-ai-camera
+    PRIVATE mosquitto yaml-cpp PRIVATE ${Protobuf_LIBRARIES} gRPC::grpc++)
 endif()
 
 # 可选: RKNN (头文件存在时尝试链接)
 if(EXISTS "${RKNN_INCLUDE_DIR}/rknn_api.h")
-    target_link_libraries(edge-ai-camera PRIVATE rknn_api)
+    target_link_libraries(edge-ai-camera
+    PRIVATE mosquitto yaml-cpp PRIVATE rknn_api)
 endif()
 
 # ── 编译选项 ──────────────────────────────────────────────

@@ -1,131 +1,399 @@
-/* SPDX-License-Identifier: MIT */
-/*
- * RKNN API Header — Rockchip NPU Runtime Library
- *
- * 从 Rockchip RKNN-Toolkit1 SDK 中提取: librknn_api/include/rknn_api.h
- * 项目路径: edge/3rdparty/librknn_api/aarch64/librknn_api.so
- *
- * 这是占位头文件，用于在 x86 PC 上做语法检查和静态分析。
- * 真实编译时替换为 Rockchip SDK 中的完整头文件。
- */
+/****************************************************************************
+*
+*    Copyright (c) 2017 - 2018 by Rockchip Corp.  All rights reserved.
+*
+*    The material in this file is confidential and contains trade secrets
+*    of Rockchip Corporation. This is proprietary information owned by
+*    Rockchip Corporation. No part of this work may be disclosed,
+*    reproduced, copied, transmitted, or used in any way for any purpose,
+*    without the express written permission of Rockchip Corporation.
+*
+*****************************************************************************/
 
-#ifndef RKNN_API_H
-#define RKNN_API_H
 
-#include <stdint.h>
+#ifndef _RKNN_API_H
+#define _RKNN_API_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ── RKNN 上下文 ───────────────────────────────────────── */
-typedef void* rknn_context;
+#include <stdint.h>
 
-/* ── Flags ──────────────────────────────────────────────── */
-#define RKNN_FLAG_COLLECT_PERF_MASK   (1 << 0)
-#define RKNN_FLAG_MEM_ALLOC_OUTSIDE   (1 << 1)
+/* RKNN API Version */
+#define API_VERSION                             "1.7.0"
 
-/* ── Tensor 格式 ───────────────────────────────────────── */
-typedef enum {
-    RKNN_TENSOR_NCHW = 0,
-    RKNN_TENSOR_NHWC = 1,
-    RKNN_TENSOR_NC1HWC2 = 2,
-    RKNN_TENSOR_UNDEFINED = 3,
-} rknn_tensor_format;
+/*
+    Definition of extended flag for rknn_init.
+*/
+/* set high priority context. */
+#define RKNN_FLAG_PRIOR_HIGH                    0x00000000
 
-/* ── Tensor 数据类型 ────────────────────────────────────── */
-typedef enum {
-    RKNN_TENSOR_FLOAT32 = 0,
-    RKNN_TENSOR_FLOAT16 = 1,
-    RKNN_TENSOR_INT8 = 2,
-    RKNN_TENSOR_UINT8 = 3,
-    RKNN_TENSOR_INT16 = 4,
-    RKNN_TENSOR_INT32 = 5,
-    RKNN_TENSOR_INT64 = 6,
-} rknn_tensor_type;
+/* set medium priority context */
+#define RKNN_FLAG_PRIOR_MEDIUM                  0x00000001
 
-/* ── 量化类型 ───────────────────────────────────────────── */
-typedef enum {
-    RKNN_TENSOR_QNT_NONE = 0,
-    RKNN_TENSOR_QNT_DFP = 1,
-    RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC = 2,
-} rknn_tensor_qnt_type;
+/* set low priority context. */
+#define RKNN_FLAG_PRIOR_LOW                     0x00000002
 
-/* ── Query 命令 ─────────────────────────────────────────── */
-typedef enum {
-    RKNN_QUERY_IN_OUT_NUM = 0,
-    RKNN_QUERY_INPUT_ATTR = 1,
-    RKNN_QUERY_OUTPUT_ATTR = 2,
-    RKNN_QUERY_SDK_VERSION = 3,
-    RKNN_QUERY_MEM_SIZE = 4,
-    RKNN_QUERY_CUSTOM_STRING = 5,
-    RKNN_QUERY_NATIVE_INPUT_ATTR = 6,
-    RKNN_QUERY_NATIVE_OUTPUT_ATTR = 7,
-    RKNN_QUERY_NATIVE_NC1HWC2_INPUT_ATTR = 8,
-    RKNN_QUERY_NATIVE_NC1HWC2_OUTPUT_ATTR = 9,
-    RKNN_QUERY_DEVICE_MEM_INFO = 10,
-    RKNN_QUERY_PERF_RUN = 11,
+/* asynchronous mode.
+   when enable, rknn_outputs_get will not block for too long because it directly retrieves the result of
+   the previous frame which can increase the frame rate on single-threaded mode, but at the cost of
+   rknn_outputs_get not retrieves the result of the current frame.
+   in multi-threaded mode you do not need to turn this mode on. */
+#define RKNN_FLAG_ASYNC_MASK                    0x00000004
+
+/* collect performance mode.
+   when enable, you can get detailed performance reports via rknn_query(ctx, RKNN_QUERY_PERF_DETAIL, ...),
+   but it will reduce the frame rate. */
+#define RKNN_FLAG_COLLECT_PERF_MASK             0x00000008
+
+/* You can store the rknn model under NPU, 
+ * when you call rknn_init(), you can pass the filename of model instead of model data.
+ * Then you can hide your model and be invisible to the end user.
+ * */
+#define RKNN_FLAG_LOAD_MODEL_IN_NPU				0x00000010
+
+/*
+    Error code returned by the RKNN API.
+*/
+#define RKNN_SUCC                               0       /* execute succeed. */
+#define RKNN_ERR_FAIL                           -1      /* execute failed. */
+#define RKNN_ERR_TIMEOUT                        -2      /* execute timeout. */
+#define RKNN_ERR_DEVICE_UNAVAILABLE             -3      /* device is unavailable. */
+#define RKNN_ERR_MALLOC_FAIL                    -4      /* memory malloc fail. */
+#define RKNN_ERR_PARAM_INVALID                  -5      /* parameter is invalid. */
+#define RKNN_ERR_MODEL_INVALID                  -6      /* model is invalid. */
+#define RKNN_ERR_CTX_INVALID                    -7      /* context is invalid. */
+#define RKNN_ERR_INPUT_INVALID                  -8      /* input is invalid. */
+#define RKNN_ERR_OUTPUT_INVALID                 -9      /* output is invalid. */
+#define RKNN_ERR_DEVICE_UNMATCH                 -10     /* the device is unmatch, please update rknn sdk
+                                                           and npu driver/firmware. */
+#define RKNN_ERR_INCOMPATILE_PRE_COMPILE_MODEL  -11     /* This RKNN model use pre_compile mode, but not compatible with current driver. */
+#define RKNN_ERR_INCOMPATILE_OPTIMIZATION_LEVEL_VERSION  -12     /* This RKNN model set optimization level, but not compatible with current driver. */
+#define RKNN_ERR_TARGET_PLATFORM_UNMATCH        -13     /* This RKNN model set target platform, but not compatible with current platform. */
+/*
+    Definition for tensor
+*/
+#define RKNN_MAX_DIMS                           16      /* maximum dimension of tensor. */
+#define RKNN_MAX_NAME_LEN                       256     /* maximum name lenth of tensor. */
+#define RKNN_MAX_NUM_CHANNEL                    128     /* maximum channel number of graph input tensor. */
+
+/*
+    Definition for deivce id
+*/
+#define RKNN_MAX_DEVS                           256     /* maximum number of device. */
+#define RKNN_MAX_DEV_LEN                        64      /* maximum id/type lenth of device. */
+
+typedef uint64_t rknn_context;
+
+
+/*
+    The query command for rknn_query
+*/
+typedef enum _rknn_query_cmd {
+    RKNN_QUERY_IN_OUT_NUM = 0,                          /* query the number of input & output tensor. */
+    RKNN_QUERY_INPUT_ATTR,                              /* query the attribute of input tensor. */
+    RKNN_QUERY_OUTPUT_ATTR,                             /* query the attribute of output tensor. */
+    RKNN_QUERY_PERF_DETAIL,                             /* query the detail performance, need set
+                                                           RKNN_FLAG_COLLECT_PERF_MASK when call rknn_init,
+                                                           this query needs to be valid after rknn_outputs_get. */
+    RKNN_QUERY_PERF_RUN,                                /* query the time of run,
+                                                           this query needs to be valid after rknn_outputs_get. */
+    RKNN_QUERY_SDK_VERSION,                             /* query the sdk & driver version */
+
+    RKNN_QUERY_CMD_MAX
 } rknn_query_cmd;
 
-/* ── SDK 版本 ───────────────────────────────────────────── */
-typedef struct {
-    char api_version[32];
-    char drv_version[32];
-} rknn_sdk_version;
+/*
+    the tensor data type.
+*/
+typedef enum _rknn_tensor_type {
+    RKNN_TENSOR_FLOAT32 = 0,                            /* data type is float32. */
+    RKNN_TENSOR_FLOAT16,                                /* data type is float16. */
+    RKNN_TENSOR_INT8,                                   /* data type is int8. */
+    RKNN_TENSOR_UINT8,                                  /* data type is uint8. */
+    RKNN_TENSOR_INT16,                                  /* data type is int16. */
 
-/* ── Tensor 属性 ────────────────────────────────────────── */
-typedef struct {
-    uint32_t index;                     /* tensor 序号 */
-    uint32_t n_dims;                    /* 维度数 (通常 4) */
-    uint32_t dims[4];                   /* [N, H, W, C] 或 [N, C, H, W] */
-    uint32_t n_elems;                   /* 元素总数 */
-    uint32_t size;                      /* 字节数 */
-    char name[64];                      /* tensor 名称 */
-    rknn_tensor_format fmt;             /* NCHW/NHWC */
-    rknn_tensor_type type;              /* float32/int8/... */
-    rknn_tensor_qnt_type qnt_type;      /* 量化方式 */
-    int32_t fl;                         /* 量化小数位 */
-    int32_t zp;                         /* 零点 */
-    float scale;                        /* 缩放因子 */
-    float w_scale;                      /* 权重量化缩放 */
+    RKNN_TENSOR_TYPE_MAX
+} rknn_tensor_type;
+
+/*
+    the quantitative type.
+*/
+typedef enum _rknn_tensor_qnt_type {
+    RKNN_TENSOR_QNT_NONE = 0,                           /* none. */
+    RKNN_TENSOR_QNT_DFP,                                /* dynamic fixed point. */
+    RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC,                  /* asymmetric affine. */
+
+    RKNN_TENSOR_QNT_MAX
+} rknn_tensor_qnt_type;
+
+/*
+    the tensor data format.
+*/
+typedef enum _rknn_tensor_format {
+    RKNN_TENSOR_NCHW = 0,                               /* data format is NCHW. */
+    RKNN_TENSOR_NHWC,                                   /* data format is NHWC. */
+    RKNN_TENSOR_NC1HWC2,                                /* data format is NC1HWC2 (project extension). */
+    RKNN_TENSOR_UNDEFINED,                              /* data format is undefined (project extension). */
+
+    RKNN_TENSOR_FORMAT_MAX
+} rknn_tensor_format;
+
+/*
+    the information for RKNN_QUERY_IN_OUT_NUM.
+*/
+typedef struct _rknn_input_output_num {
+    uint32_t n_input;                                   /* the number of input. */
+    uint32_t n_output;                                  /* the number of output. */
+} rknn_input_output_num;
+
+/*
+    the information for RKNN_QUERY_INPUT_ATTR / RKNN_QUERY_OUTPUT_ATTR.
+*/
+typedef struct _rknn_tensor_attr {
+    uint32_t index;                                     /* input parameter, the index of input/output tensor,
+                                                           need set before call rknn_query. */
+
+    uint32_t n_dims;                                    /* the number of dimensions. */
+    uint32_t dims[RKNN_MAX_DIMS];                       /* the dimensions array. */
+    char name[RKNN_MAX_NAME_LEN];                       /* the name of tensor. */
+
+    uint32_t n_elems;                                   /* the number of elements. */
+    uint32_t size;                                      /* the bytes size of tensor. */
+
+    rknn_tensor_format fmt;                             /* the data format of tensor. */
+    rknn_tensor_type type;                              /* the data type of tensor. */
+    rknn_tensor_qnt_type qnt_type;                      /* the quantitative type of tensor. */
+    int8_t fl;                                          /* fractional length for RKNN_TENSOR_QNT_DFP. */
+    uint32_t zp;                                        /* zero point for RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC. */
+    float scale;                                        /* scale for RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC. */
 } rknn_tensor_attr;
 
-/* ── 输入 ───────────────────────────────────────────────── */
-typedef struct {
-    uint32_t index;
-    void*    buf;
-    uint32_t size;
-    uint32_t pass_through;
-    rknn_tensor_type type;
-    rknn_tensor_format fmt;
-} rknn_input;
+/*
+    the information for RKNN_QUERY_PERF_DETAIL.
+*/
+typedef struct _rknn_perf_detail {
+    char* perf_data;                                    /* the string pointer of perf detail. don't need free it by user. */
+    uint64_t data_len;                                  /* the string length. */
+} rknn_perf_detail;
 
-/* ── 输出 ───────────────────────────────────────────────── */
-typedef struct {
-    uint8_t  want_float;
-    uint8_t  is_prealloc;
-    uint32_t index;
-    void*    buf;
-    uint32_t size;
-} rknn_output;
-
-/* ── 推理性能统计 ────────────────────────────────────────── */
-typedef struct {
-    uint64_t run_duration;              /* 推理耗时 (微秒) */
-    uint64_t time_interval;             /* 总耗时 */
+/*
+    the information for RKNN_QUERY_PERF_RUN.
+*/
+typedef struct _rknn_perf_run {
+    int64_t run_duration;                               /* real inference time (us) */
 } rknn_perf_run;
 
-/* ── API 函数 ────────────────────────────────────────────── */
-int rknn_init(rknn_context* ctx, void* model, uint32_t size, uint32_t flag, void* opt);
-int rknn_destroy(rknn_context ctx);
-int rknn_query(rknn_context ctx, rknn_query_cmd cmd, void* info, uint32_t size);
-int rknn_inputs_set(rknn_context ctx, uint32_t n_inputs, rknn_input inputs[]);
-int rknn_run(rknn_context ctx, void* extend);
-int rknn_outputs_get(rknn_context ctx, uint32_t n_outputs, rknn_output outputs[], void* extend);
-int rknn_outputs_release(rknn_context ctx, uint32_t n_outputs, rknn_output outputs[]);
+/*
+    the information for RKNN_QUERY_SDK_VERSION.
+*/
+typedef struct _rknn_sdk_version {
+    char api_version[256];                              /* the version of rknn api. */
+    char drv_version[256];                              /* the version of rknn driver. */
+} rknn_sdk_version;
+
+/*
+    the information for rknn_find_devices.
+*/
+typedef struct _rknn_devices_id {
+    uint32_t n_devices;                                 /* the number of devices. */
+    char types[RKNN_MAX_DEVS][RKNN_MAX_DEV_LEN];        /* the array of device type. */
+    char ids[RKNN_MAX_DEVS][RKNN_MAX_DEV_LEN];          /* the array of device ID. */
+} rknn_devices_id;
+
+/*
+    the input information for rknn_input_set.
+*/
+typedef struct _rknn_input {
+    uint32_t index;                                     /* the input index. */
+    void* buf;                                          /* the input buf for index. */
+    uint32_t size;                                      /* the size of input buf. */
+    uint8_t pass_through;                               /* pass through mode.
+                                                           if TRUE, the buf data is passed directly to the input node of the rknn model
+                                                                    without any conversion. the following variables do not need to be set.
+                                                           if FALSE, the buf data is converted into an input consistent with the model
+                                                                     according to the following type and fmt. so the following variables
+                                                                     need to be set.*/
+    rknn_tensor_type type;                              /* the data type of input buf. */
+    rknn_tensor_format fmt;                             /* the data format of input buf.
+                                                           currently the internal input format of NPU is NCHW by default.
+                                                           so entering NCHW data can avoid the format conversion in the driver. */
+} rknn_input;
+
+/*
+    the output information for rknn_outputs_get.
+*/
+typedef struct _rknn_output {
+    uint8_t want_float;                                 /* want transfer output data to float */
+    uint8_t is_prealloc;                                /* whether buf is pre-allocated.
+                                                           if TRUE, the following variables need to be set.
+                                                           if FALSE, the following variables do not need to be set. */
+    uint32_t index;                                     /* the output index. */
+    void* buf;                                          /* the output buf for index.
+                                                           when is_prealloc = FALSE and rknn_outputs_release called,
+                                                           this buf pointer will be free and don't use it anymore. */
+    uint32_t size;                                      /* the size of output buf. */
+} rknn_output;
+
+/*
+    the extend information for rknn_init.
+*/
+typedef struct _rknn_init_extend {
+    char* device_id;                                    /* input parameter, indicate which device selected. if only one
+                                                           device connected, can set nullptr. */
+} rknn_init_extend;
+
+/*
+    the extend information for rknn_run.
+*/
+typedef struct _rknn_run_extend {
+    uint64_t frame_id;                                  /* output parameter, indicate current frame id of run. */
+} rknn_run_extend;
+
+/*
+    the extend information for rknn_outputs_get.
+*/
+typedef struct _rknn_output_extend {
+    uint64_t frame_id;                                  /* output parameter, indicate the frame id of outputs, corresponds to
+                                                           struct rknn_run_extend.frame_id.*/
+} rknn_output_extend;
+
+
+/*  rknn_find_devices
+
+    find the devices that connected to host.
+
+    input:
+        rknn_devices_id* pdevs      the pointer of devices information structure.
+    return:
+        int                         error code.
+*/
+int rknn_find_devices(rknn_devices_id* pdevs);
+
+
+/*  rknn_init
+
+    initial the context and load the rknn model.
+
+    input:
+        rknn_context* context       the pointer of context handle.
+        void* model                 pointer to the rknn model.
+        uint32_t size               the size of rknn model.
+        uint32_t flag               extend flag, see the define of RKNN_FLAG_XXX_XXX.
+    return:
+        int                         error code.
+*/
+int rknn_init(rknn_context* context, void* model, uint32_t size, uint32_t flag, void* opt);
+
+
+/*  rknn_init2
+
+    initial the context and load the rknn model (version 2).
+
+    input:
+        rknn_context* context       the pointer of context handle.
+        void* model                 pointer to the rknn model.
+        uint32_t size               the size of rknn model.
+        uint32_t flag               extend flag, see the define of RKNN_FLAG_XXX_XXX.
+        rknn_init_extend* extend    the extend information of init.
+    return:
+        int                         error code.
+*/
+int rknn_init2(rknn_context* context, void* model, uint32_t size, uint32_t flag, rknn_init_extend* extend);
+
+
+/*  rknn_destroy
+
+    unload the rknn model and destroy the context.
+
+    input:
+        rknn_context context        the handle of context.
+    return:
+        int                         error code.
+*/
+int rknn_destroy(rknn_context context);
+
+
+/*  rknn_query
+
+    query the information about model or others. see rknn_query_cmd.
+
+    input:
+        rknn_context context        the handle of context.
+        rknn_query_cmd cmd          the command of query.
+        void* info                  the buffer point of information.
+        uint32_t size               the size of information.
+    return:
+        int                         error code.
+*/
+int rknn_query(rknn_context context, rknn_query_cmd cmd, void* info, uint32_t size);
+
+
+/*  rknn_inputs_set
+
+    set inputs information by input index of rknn model.
+    inputs information see rknn_input.
+
+    input:
+        rknn_context context        the handle of context.
+        uint32_t n_inputs           the number of inputs.
+        rknn_input inputs[]         the arrays of inputs information, see rknn_input.
+    return:
+        int                         error code
+*/
+int rknn_inputs_set(rknn_context context, uint32_t n_inputs, rknn_input inputs[]);
+
+
+/*  rknn_run
+
+    run the model to execute inference.
+    this function does not block normally, but it blocks when more than 3 inferences
+    are not obtained by rknn_outputs_get.
+
+    input:
+        rknn_context context        the handle of context.
+        rknn_run_extend* extend     the extend information of run.
+    return:
+        int                         error code.
+*/
+int rknn_run(rknn_context context, rknn_run_extend* extend);
+
+
+/*  rknn_outputs_get
+
+    wait the inference to finish and get the outputs.
+    this function will block until inference finish.
+    the results will set to outputs[].
+
+    input:
+        rknn_context context        the handle of context.
+        uint32_t n_outputs          the number of outputs.
+        rknn_output outputs[]       the arrays of output, see rknn_output.
+        rknn_output_extend*         the extend information of output.
+    return:
+        int                         error code.
+*/
+int rknn_outputs_get(rknn_context context, uint32_t n_outputs, rknn_output outputs[], rknn_output_extend* extend);
+
+
+/*  rknn_outputs_release
+
+    release the outputs that get by rknn_outputs_get.
+    after called, the rknn_output[x].buf get from rknn_outputs_get will
+    also be free when rknn_output[x].is_prealloc = FALSE.
+
+    input:
+        rknn_context context        the handle of context.
+        uint32_t n_ouputs           the number of outputs.
+        rknn_output outputs[]       the arrays of output.
+    return:
+        int                         error code
+*/
+int rknn_outputs_release(rknn_context context, uint32_t n_ouputs, rknn_output outputs[]);
 
 #ifdef __cplusplus
-}
+} //extern "C"
 #endif
 
-#endif /* RKNN_API_H */
+#endif  //_RKNN_API_H

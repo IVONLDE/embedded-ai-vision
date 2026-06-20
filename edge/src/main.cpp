@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <getopt.h>
+#include <unistd.h>
 #include <systemd/sd-daemon.h>
 
 /* ── 命令行选项 ────────────────────────────────────────── */
@@ -143,9 +144,7 @@ int main(int argc, char *argv[])
     }
 
     /* ── systemd 通知: 服务就绪 ── */
-    sd_notify(0, "READY=1\n"
-                 "STATUS=Edge AI Camera running\n"
-                 "MAINPID=%lu", (unsigned long)getpid());
+    char notify_buf[256]; snprintf(notify_buf, sizeof(notify_buf), "READY=1\nSTATUS=Edge AI Camera running\nMAINPID=%lu", (unsigned long)getpid()); sd_notify(0, notify_buf);
 
     printf("[Main] Systemd notification sent: READY=1\n");
 

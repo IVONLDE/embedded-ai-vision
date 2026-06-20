@@ -306,7 +306,7 @@ static void tracking_thread_func(const PipelineConfig &cfg,
             tracker.update(det.boxes);
 
             /* 提取活跃轨迹 */
-            for (const auto &track : tracker.tracks) {
+            for (const auto &track : tracker.tracks()) {
                 if (!track.is_confirmed() ||
                     track.time_since_update > 1)
                     continue;

@@ -48,10 +48,8 @@ public:
         _cmd_callback = cb;
     }
 
-private:
     void handle_command(const char *topic, const char *payload, int len);
 
-private:
     struct mosquitto *_mosq;
     bool _connected;
 
