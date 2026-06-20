@@ -206,7 +206,8 @@ static void capture_thread_func(const PipelineConfig &cfg,
  */
 static void inference_thread_func(const PipelineConfig &cfg,
                                   SpscQueue<FrameData> &frame_queue,
-                                  SpscQueue<DetectResult> &detect_queue)
+                                  SpscQueue<DetectResult> &detect_queue,
+                                  Rknn1Engine *shared_engine)
 {
     printf("[Pipeline] Inference thread started on CPU %d\n",
            cfg.system.cpu_inference);
@@ -216,16 +217,8 @@ static void inference_thread_func(const PipelineConfig &cfg,
     CPU_SET(cfg.system.cpu_inference, &mask);
     pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask);
 
-    /* 推理线程尝试创建 NPU 引擎（如果主线程已创建则失败，但不崩溃） */
-    Rknn1Engine *engine_ptr = nullptr;
-    try {
-        engine_ptr = new Rknn1Engine(cfg.inference.model_path.c_str(),
-                                     cfg.system.cpu_inference);
-        printf("[Pipeline] Inference NPU engine initialized\n");
-    } catch (const std::exception &e) {
-        printf("[Pipeline] Inference NPU engine init skipped: %s\n", e.what());
-    }
-    /* 如果没有成功创建引擎，后续推理会失败但不崩溃 */
+    /* 使用主线程共享的 NPU 引擎 (RK3399Pro 只允许一个 NPU 上下文) */
+    Rknn1Engine *engine_ptr = shared_engine;
     bool has_inf_engine = (engine_ptr != nullptr);
 
     std::queue<float> perf_history;
@@ -485,7 +478,8 @@ int pipeline_run(const PipelineConfig &cfg)
     std::thread inference_th(inference_thread_func,
                              std::ref(cfg),
                              std::ref(frame_queue),
-                             std::ref(detect_queue));
+                             std::ref(detect_queue),
+                             &engine);
     std::thread tracking_th(tracking_thread_func,
                             std::ref(cfg),
                             std::ref(detect_queue),
