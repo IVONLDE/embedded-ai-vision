@@ -39,6 +39,7 @@
 /* ── 全局状态 ──────────────────────────────────────────── */
 static std::atomic<bool> g_running{true};
 static std::atomic<bool> g_shutdown_requested{false};
+static GrpcServer *g_grpc_server = nullptr;  /* 用于 MQTT 命令转发 */
 
 /* ── 线程间队列 ────────────────────────────────────────── */
 struct FrameData {
@@ -378,6 +379,29 @@ static void output_thread_func(const PipelineConfig &cfg,
     if (cfg.mqtt.enabled) {
         mqtt.connect(cfg.mqtt.broker_host, cfg.mqtt.broker_port,
                      cfg.mqtt.client_id, cfg.mqtt.keepalive);
+
+        /* 设置 MQTT 命令回调 → 转发到 gRPC server 的 handle_command */
+        mqtt.set_command_callback([](const char *topic,
+                                      const char *payload, int len) {
+            /* 等待 gRPC server 就绪 */
+            if (!g_grpc_server) return;
+
+            std::string msg(payload, len);
+            std::string cmd;
+
+            /* 简化 JSON 解析: 提取命令类型 */
+            if (msg.find("\"switch_scene\"") != std::string::npos)
+                cmd = "switch_scene";
+            else if (msg.find("\"reload_model\"") != std::string::npos)
+                cmd = "reload_model";
+            else if (msg.find("\"app_update\"") != std::string::npos)
+                cmd = "app_update";
+            else if (msg.find("\"rollback\"") != std::string::npos)
+                cmd = "rollback";
+
+            if (!cmd.empty())
+                g_grpc_server->handle_command(cmd, msg);
+        });
     }
 
     while (g_running.load()) {
@@ -410,12 +434,14 @@ static void output_thread_func(const PipelineConfig &cfg,
 
 /* ── gRPC 服务线程 ─────────────────────────────────────── */
 /*
- * grpc_server_thread_func — gRPC 模型更新服务
+ * grpc_server_thread_func — gRPC 模型更新服务 + OTA
  *
  * 独立线程, 监听 gRPC 请求:
  *   - PushModel: 接收新模型 → 热加载
  *   - SwitchScene: 切换场景
  *   - GetStatus: 返回设备状态
+ *   - Rollback: 版本回滚
+ *   - GetVersionInfo: 查询版本
  */
 static void grpc_server_thread_func(const PipelineConfig &cfg,
                                     Rknn1Engine *engine)
@@ -423,15 +449,23 @@ static void grpc_server_thread_func(const PipelineConfig &cfg,
     printf("[Pipeline] gRPC server thread started on %s\n",
            cfg.grpc.listen_address.c_str());
 
+    /* 初始化 OTA Manager */
+    OtaManager ota_manager(engine, &cfg);
+
     GrpcServer server;
+    g_grpc_server = &server;
     server.start(cfg.grpc.listen_address, cfg.grpc.unix_socket,
                  engine, &cfg);
+
+    /* 连接 OTA Manager 到 gRPC server */
+    grpc_set_ota_manager(&ota_manager);
 
     /* gRPC 服务器在主循环中运行, 直到 shutdown */
     while (g_running.load()) {
         sleep(1);
     }
 
+    g_grpc_server = nullptr;
     server.stop();
     printf("[Pipeline] gRPC server thread stopped\n");
 }
