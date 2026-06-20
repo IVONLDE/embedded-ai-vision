@@ -62,17 +62,26 @@ echo ""
 echo "[3/3] Notifying device..."
 
 if [ -n "${SCENE_NAME}" ]; then
-    # 通过 gRPC 切换场景
-    echo "Switching scene to '${SCENE_NAME}' via gRPC..."
-    # TODO: 实现 gRPC 客户端
-    # grpc_cli call ${DEVICE_IP}:50051 EdgeService.SwitchScene \
-    #     "{\"scene_name\": \"${SCENE_NAME}\"}"
-    echo "(gRPC client not yet implemented — restarting service instead)"
-    ssh ${DEVICE_USER}@${DEVICE_IP} "systemctl restart edge-ai-camera"
+    # 通过 UNIX socket JSON-RPC 切换场景
+    echo "Switching scene to '${SCENE_NAME}' via JSON-RPC..."
+    ssh ${DEVICE_USER}@${DEVICE_IP} \
+        "echo '{\"method\":\"SwitchScene\",\"params\":{\"scene_name\":\"${SCENE_NAME}\"}}' | nc -U /tmp/edge-ai-grpc.sock -W 5"
+    if [ $? -eq 0 ]; then
+        echo "Scene switch command sent successfully"
+    else
+        echo "Warning: JSON-RPC failed, falling back to service restart"
+        ssh ${DEVICE_USER}@${DEVICE_IP} "systemctl restart edge-ai-camera"
+    fi
 else
-    # 只通知模型热加载
-    echo "Triggering model hot-reload..."
-    ssh ${DEVICE_USER}@${DEVICE_IP} "systemctl reload edge-ai-camera"
+    # 通过 UNIX socket 通知模型热加载
+    echo "Triggering model hot-reload via JSON-RPC..."
+    MODEL_NAME=$(basename ${MODEL_PATH})
+    ssh ${DEVICE_USER}@${DEVICE_IP} \
+        "echo '{\"method\":\"PushModel\",\"params\":{\"model_name\":\"${MODEL_NAME}\"}}' | nc -U /tmp/edge-ai-grpc.sock -W 5"
+    if [ $? -ne 0 ]; then
+        echo "Warning: JSON-RPC failed, falling back to SIGHUP reload"
+        ssh ${DEVICE_USER}@${DEVICE_IP} "systemctl reload edge-ai-camera"
+    fi
 fi
 
 # 5. 验证

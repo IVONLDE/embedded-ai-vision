@@ -6,7 +6,7 @@ from .export_service import ExportService
 from .generation_service import GenerationService
 from .settings_service import SettingsService
 from .training_service import TrainingService
-from .edge_manager_service import EdgeService
+from .edge_service import EdgeService
 
 __all__ = [
     "AlgorithmService",

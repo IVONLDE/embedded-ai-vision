@@ -34,6 +34,7 @@
 #include <gst/video/gstvideofilter.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 /* RKNN API */
 #include "rknn_api.h"
@@ -43,6 +44,96 @@
 
 GST_DEBUG_CATEGORY_STATIC(rknn_inference_debug);
 #define GST_CAT_DEFAULT rknn_inference_debug
+
+/* ── 自定义 GstMeta: 检测结果 ─────────────────────────────── */
+/*
+ * RknnDetectionMeta — 附加到 GstBuffer 的检测结果元数据
+ *
+ * 由 rknninference 元素在每帧推理后附加到 outgoing buffer,
+ * 下游元素 (rknndraw, appsink 等) 通过 gst_buffer_get_meta() 读取。
+ */
+typedef struct _RknnDetectionMeta
+{
+    GstMeta parent;
+
+    gint num_detections;
+    /* 检测框数组 (在 meta 之后分配) */
+    gfloat *boxes;       /* [num_detections * 6]: x1,y1,x2,y2,conf,class_id */
+    gchar  **class_names; /* [num_detections]: 类别名称 */
+} RknnDetectionMeta;
+
+GType rknn_detection_meta_api_get_type(void);
+#define RKNN_DETECTION_META_API_TYPE (rknn_detection_meta_api_get_type())
+#define RKNN_DETECTION_META_INFO (rknn_detection_meta_get_info())
+static const GstMetaInfo *rknn_detection_meta_get_info(void);
+
+/* GstMeta 注册 */
+GType rknn_detection_meta_api_get_type(void)
+{
+    static GType type = 0;
+    if (g_once_init_enter(&type)) {
+        static const gchar *tags[] = { NULL };
+        GType _type = gst_meta_api_type_register(
+            "RknnDetectionMetaAPI", tags);
+        g_once_init_leave(&type, _type);
+    }
+    return type;
+}
+
+static gboolean rknn_detection_meta_init(GstMeta *meta,
+                                          gpointer params,
+                                          GstBuffer *buffer)
+{
+    RknnDetectionMeta *rmeta = (RknnDetectionMeta *)meta;
+    rmeta->num_detections = 0;
+    rmeta->boxes = NULL;
+    rmeta->class_names = NULL;
+    return TRUE;
+}
+
+static void rknn_detection_meta_free(GstMeta *meta, GstBuffer *buffer)
+{
+    RknnDetectionMeta *rmeta = (RknnDetectionMeta *)meta;
+    if (rmeta->boxes) {
+        g_free(rmeta->boxes);
+        rmeta->boxes = NULL;
+    }
+    if (rmeta->class_names) {
+        for (gint i = 0; i < rmeta->num_detections; i++)
+            g_free(rmeta->class_names[i]);
+        g_free(rmeta->class_names);
+        rmeta->class_names = NULL;
+    }
+    rmeta->num_detections = 0;
+}
+
+static const GstMetaInfo *rknn_detection_meta_get_info(void)
+{
+    static const GstMetaInfo *info = NULL;
+    if (g_once_init_enter(&info)) {
+        static const GstMetaInfo rknn_meta_info = {
+            RKNN_DETECTION_META_API_TYPE,
+            "RknnDetectionMeta",
+            sizeof(RknnDetectionMeta),
+            rknn_detection_meta_init,
+            rknn_detection_meta_free,
+            NULL  /* no transform_func — 检测结果在 transform 时重新生成 */
+        };
+        g_once_init_leave(&info, &rknn_meta_info);
+    }
+    return info;
+}
+
+/*
+ * 便捷宏: 从 GstBuffer 获取检测结果
+ * 用法:
+ *   RknnDetectionMeta *meta = RKNN_GET_DETECTION_META(buffer);
+ *   if (meta) {
+ *       for (int i = 0; i < meta->num_detections; i++) { ... }
+ *   }
+ */
+#define RKNN_GET_DETECTION_META(buf) \
+    ((RknnDetectionMeta *)gst_buffer_get_meta((buf), RKNN_DETECTION_META_API_TYPE))
 
 /* ── 元素结构体 ────────────────────────────────────────── */
 typedef struct _GstRknnInference
@@ -73,27 +164,20 @@ typedef struct _GstRknnInference
     /* 帧计数 (隔帧检测) */
     gint frame_count;
 
-    /* 上一帧的检测结果 (隔帧时复用) */
-    GMutex result_mutex;
-    GArray *last_results;
+    /* Anchor 定义 (YOLOv5) */
+    gfloat anchors[3][6];
 
     /* 性能统计 */
     gdouble avg_inference_ms;
+
+    /* 输入 buffer (预分配, 避免每帧 malloc) */
+    guchar *prealloc_input;
 } GstRknnInference;
 
 typedef struct _GstRknnInferenceClass
 {
     GstVideoFilterClass parent_class;
 } GstRknnInferenceClass;
-
-/* ── 检测结果结构体 ────────────────────────────────────── */
-typedef struct
-{
-    gint x1, y1, x2, y2;
-    gfloat confidence;
-    gint class_id;
-    gchar class_name[64];
-} DetectionBox;
 
 /* ── GStreamer 元素元数据 ──────────────────────────────── */
 #define GST_TYPE_RKNN_INFERENCE (gst_rknn_inference_get_type())
@@ -113,11 +197,73 @@ enum
     PROP_INTERVAL,
 };
 
-/* ── 标签加载 ──────────────────────────────────────────── */
+/* ── sigmoid ───────────────────────────────────────────── */
+static inline gfloat sigmoid_f(gfloat x)
+{
+    return 1.0f / (1.0f + expf(-x));
+}
+
+/* ── IoU 计算 ──────────────────────────────────────────── */
+static gfloat calc_iou(gfloat xmin0, gfloat ymin0, gfloat xmax0, gfloat ymax0,
+                        gfloat xmin1, gfloat ymin1, gfloat xmax1, gfloat ymax1)
+{
+    gfloat w = fmaxf(0.0f, fminf(xmax0, xmax1) - fmaxf(xmin0, xmin1));
+    gfloat h = fmaxf(0.0f, fminf(ymax0, ymax1) - fmaxf(ymin0, ymin1));
+    gfloat i = w * h;
+    gfloat u = (xmax0 - xmin0) * (ymax0 - ymin0) +
+               (xmax1 - xmin1) * (ymax1 - ymin1) - i;
+    return (u <= 0.0f) ? 0.0f : (i / u);
+}
+
+/* ── 快速排序 (按置信度降序) ───────────────────────────── */
+static void quick_sort_desc(gfloat *scores, gint *indices,
+                             gint left, gint right)
+{
+    if (left >= right) return;
+    gint i = left, j = right;
+    gfloat pivot = scores[indices[(left + right) / 2]];
+    while (i <= j) {
+        while (scores[indices[i]] > pivot) i++;
+        while (scores[indices[j]] < pivot) j--;
+        if (i <= j) {
+            gint tmp = indices[i];
+            indices[i] = indices[j];
+            indices[j] = tmp;
+            i++; j--;
+        }
+    }
+    if (left < j) quick_sort_desc(scores, indices, left, j);
+    if (i < right) quick_sort_desc(scores, indices, i, right);
+}
+
+/* ── NMS ──────────────────────────────────────────────── */
+static void run_nms(GArray *boxes, gfloat *scores, gint *indices,
+                    gint valid_count, gfloat nms_threshold)
+{
+    for (gint i = 0; i < valid_count; i++) {
+        if (indices[i] == -1) continue;
+        gint n = indices[i];
+        gfloat *box_n = &g_array_index(boxes, gfloat, n * 4);
+        for (gint j = i + 1; j < valid_count; j++) {
+            if (indices[j] == -1) continue;
+            gint m = indices[j];
+            gfloat *box_m = &g_array_index(boxes, gfloat, m * 4);
+            gfloat iou = calc_iou(
+                box_n[0], box_n[1], box_n[0] + box_n[2],
+                box_n[1] + box_n[3],
+                box_m[0], box_m[1], box_m[0] + box_m[2],
+                box_m[1] + box_m[3]);
+            if (iou > nms_threshold)
+                indices[j] = -1;
+        }
+    }
+}
+
+/* ── 标签加载 ─────────────────────────────────────────── */
 static gboolean load_labels(GstRknnInference *self)
 {
     if (!self->labels_path)
-        return TRUE;  /* 无标签文件也可运行 */
+        return TRUE;
 
     FILE *fp = fopen(self->labels_path, "r");
     if (!fp) {
@@ -126,7 +272,6 @@ static gboolean load_labels(GstRknnInference *self)
         return FALSE;
     }
 
-    /* 先统计行数 */
     gint count = 0;
     gchar line[256];
     while (fgets(line, sizeof(line), fp))
@@ -138,7 +283,6 @@ static gboolean load_labels(GstRknnInference *self)
 
     gint i = 0;
     while (fgets(line, sizeof(line), fp) && i < count) {
-        /* 去掉换行符 */
         g_strstrip(line);
         self->labels[i] = g_strdup(line);
         i++;
@@ -170,7 +314,7 @@ static gboolean load_rknn_model(GstRknnInference *self)
     fseek(fp, 0, SEEK_SET);
 
     model_data = (guchar *)g_malloc(model_len);
-    if (model_len != fread(model_data, 1, model_len, fp)) {
+    if (model_len != (gint)fread(model_data, 1, model_len, fp)) {
         GST_ERROR_OBJECT(self, "Failed to read model file");
         fclose(fp);
         g_free(model_data);
@@ -178,7 +322,6 @@ static gboolean load_rknn_model(GstRknnInference *self)
     }
     fclose(fp);
 
-    /* RKNN1 API: rknn_init */
     ret = rknn_init(&self->ctx, model_data, model_len,
                     RKNN_FLAG_COLLECT_PERF_MASK, NULL);
     g_free(model_data);
@@ -217,6 +360,10 @@ static gboolean load_rknn_model(GstRknnInference *self)
                     self->model_width, self->model_height,
                     self->model_channels);
 
+    /* 预分配输入 buffer */
+    self->prealloc_input = (guchar *)g_malloc(
+        self->model_width * self->model_height * self->model_channels);
+
     /* 查询输出属性 */
     memset(self->output_attrs, 0, sizeof(self->output_attrs));
     for (gint i = 0; i < 3; i++) {
@@ -236,22 +383,14 @@ static gboolean load_rknn_model(GstRknnInference *self)
 }
 
 /* ── 图像预处理 (LetterBox Resize) ─────────────────────── */
-/*
- * 将 GStreamer buffer 中的视频帧转换为 RKNN 模型输入格式:
- *   1. BGR → RGB
- *   2. LetterBox resize (保持宽高比, 填充灰边)
- *   3. 归一化 (可选, 取决于模型训练时的预处理)
- */
 static gboolean preprocess_frame(GstRknnInference *self,
-                                 GstVideoFrame *frame,
-                                 guchar *input_data)
+                                 GstVideoFrame *frame)
 {
     GstVideoInfo *info = &frame->info;
     gint width = GST_VIDEO_INFO_WIDTH(info);
     gint height = GST_VIDEO_INFO_HEIGHT(info);
     gint stride = GST_VIDEO_INFO_PLANE_STRIDE(info, 0);
 
-    /* 映射 GStreamer buffer 到 OpenCV Mat (不拷贝) */
     guchar *frame_data = (guchar *)GST_VIDEO_FRAME_PLANE_DATA(frame, 0);
 
     cv::Mat img(height, width, CV_8UC3, frame_data, stride);
@@ -268,7 +407,6 @@ static gboolean preprocess_frame(GstRknnInference *self,
 
     cv::resize(rgb, resized, cv::Size(new_w, new_h));
 
-    /* 填充到模型输入尺寸 */
     gint top = (self->model_height - new_h) / 2;
     gint bottom = self->model_height - new_h - top;
     gint left = (self->model_width - new_w) / 2;
@@ -277,100 +415,243 @@ static gboolean preprocess_frame(GstRknnInference *self,
     cv::copyMakeBorder(resized, padded, top, bottom, left, right,
                        cv::BORDER_CONSTANT, cv::Scalar(114, 114, 114));
 
-    /* 拷贝到 RKNN 输入 buffer */
-    memcpy(input_data, padded.data,
+    /* 拷贝到预分配 buffer */
+    memcpy(self->prealloc_input, padded.data,
            self->model_width * self->model_height * self->model_channels);
 
     return TRUE;
 }
 
-/* ── 后处理 (简化的 YOLOv5 解码 + NMS) ─────────────────── */
 /*
- * 注: 完整的 YOLOv5 后处理 (sigmoid解码/anchor映射/NMS)
- *     在 edge/src/inference/yolov5/decode.cpp 中实现。
- *     这里提供一个简化版本用于 GStreamer 插件演示。
- *     实际项目中使用完整的 decode.cpp 逻辑。
+ * ── 单层 YOLOv5 解码 ─────────────────────────────────────
+ *
+ * 从 YOLOv5 原始输出解码边界框 (完整的 sigmoid + anchor 映射)。
+ * 与 edge/src/inference/yolov5/decode.cpp 中的 process_layer_fp 逻辑一致。
  */
-static void postprocess_yolov5(GstRknnInference *self,
-                               gfloat *outputs[3],
-                               gint orig_w, gint orig_h,
-                               GArray *results)
+static gint decode_yolov5_layer(gfloat *input, const gfloat *anchor,
+                                 gint grid_h, gint grid_w, gint stride,
+                                 gint num_classes,
+                                 gfloat threshold,
+                                 GArray *boxes, GArray *scores,
+                                 GArray *class_ids)
 {
-    /* 简化实现: 遍历输出, 提取置信度 > threshold 的检测框 */
-    for (gint layer = 0; layer < 3; layer++) {
-        rknn_tensor_attr *attr = &self->output_attrs[layer];
-        gint num_elements = attr->n_elems;
-        gfloat *data = outputs[layer];
+    gint valid_count = 0;
+    gint grid_len = grid_h * grid_w;
+    gint props = 5 + num_classes;
 
-        /* YOLOv5 输出格式: [batch, (5+num_classes), grid_h, grid_w]
-         * 这里做简化处理, 实际应使用完整的 decode 逻辑 */
-        gint grid_h = attr->dims[1];
-        gint grid_w = attr->dims[2];
-        gint stride = 8 << layer;  /* 8, 16, 32 */
-        gint props = 5 + self->num_classes;
+    /*
+     * 将置信度阈值转换为 sigmoid 的逆:
+     *  若 sigmoid(x) > threshold, 则 x > -ln(1/threshold - 1)
+     */
+    gfloat thres_sigmoid_inv = (threshold > 0.0f)
+        ? -1.0f * logf((1.0f / threshold) - 1.0f)
+        : -1e10f;
 
-        for (gint i = 0; i < grid_h * grid_w; i++) {
-            gfloat conf = data[i * props + 4];  /* objectness */
-            if (conf < self->threshold)
-                continue;
+    for (gint a = 0; a < 3; a++) {
+        for (gint i = 0; i < grid_h; i++) {
+            for (gint j = 0; j < grid_w; j++) {
+                /* objectness (在 sigmoid 之前的 logit 空间中比较) */
+                gfloat box_conf = input[(props * a + 4) * grid_len + i * grid_w + j];
+                if (box_conf < thres_sigmoid_inv)
+                    continue;
 
-            DetectionBox box;
-            box.x1 = (gint)((i % grid_w) * stride);
-            box.y1 = (gint)((i / grid_w) * stride);
-            box.x2 = box.x1 + stride;
-            box.y2 = box.y1 + stride;
-            box.confidence = conf;
-            box.class_id = 0;
-            g_strlcpy(box.class_name,
-                      self->labels ? self->labels[0] : "object",
-                      sizeof(box.class_name));
+                gint offset = (props * a) * grid_len + i * grid_w + j;
+                gfloat *in_ptr = input + offset;
 
-            g_array_append_val(results, box);
+                /* sigmoid 解码 + anchor 映射 */
+                gfloat bx = sigmoid_f(in_ptr[0]) * 2.0f - 0.5f;
+                gfloat by = sigmoid_f(in_ptr[1 * grid_len]) * 2.0f - 0.5f;
+                gfloat bw = sigmoid_f(in_ptr[2 * grid_len]) * 2.0f;
+                gfloat bh = sigmoid_f(in_ptr[3 * grid_len]) * 2.0f;
+
+                bx = (bx + j) * stride;
+                by = (by + i) * stride;
+                bw = bw * bw * anchor[a * 2];
+                bh = bh * bh * anchor[a * 2 + 1];
+                bx -= bw / 2.0f;
+                by -= bh / 2.0f;
+
+                /* 添加 bbox [x, y, w, h] */
+                gfloat box[4] = { bx, by, bw, bh };
+                g_array_append_vals(boxes, box, 4);
+
+                /* 最大类别概率 */
+                gfloat max_class_prob = in_ptr[5 * grid_len];
+                gfloat conf = sigmoid_f(box_conf);
+                gfloat score = conf * sigmoid_f(max_class_prob);
+
+                /* 找到最佳类别 (对于多类模型) */
+                gint best_class = 0;
+                if (num_classes > 1) {
+                    gfloat best_prob = max_class_prob;
+                    for (gint c = 1; c < num_classes; c++) {
+                        gfloat class_prob = in_ptr[(5 + c) * grid_len];
+                        if (class_prob > best_prob) {
+                            best_prob = class_prob;
+                            best_class = c;
+                        }
+                    }
+                    score = conf * sigmoid_f(best_prob);
+                }
+
+                gfloat s = score;
+                g_array_append_val(scores, s);
+                gint cid = best_class;
+                g_array_append_val(class_ids, cid);
+                valid_count++;
+            }
         }
     }
+    return valid_count;
+}
+
+/* ── 完整 YOLOv5 后处理 ────────────────────────────────── */
+/*
+ * postprocess_yolov5_full — 完整的 YOLOv5 解码 + NMS
+ *
+ * 直接复用了 edge/src/inference/yolov5/decode.cpp 中的算法,
+ * 包括:
+ *   - COCO anchors (3 层 × 3 组 = 18 个 anchor)
+ *   - sigmoid 激活的 box 坐标解码
+ *   - 置信度阈值过滤
+ *   - NMS (IoU 阈值过滤)
+ *
+ * 输出: GArray of {x1,y1,x2,y2,conf,class_id,class_name}
+ */
+static GArray *postprocess_yolov5_full(GstRknnInference *self,
+                                        gfloat *outputs[3],
+                                        gint orig_w, gint orig_h)
+{
+    /*
+     * Layer 配置:
+     *   Layer 0: stride=8,  grid=80×80  (小目标)
+     *   Layer 1: stride=16, grid=40×40  (中目标)
+     *   Layer 2: stride=32, grid=20×20  (大目标)
+     */
+    static const gint strides[3] = {8, 16, 32};
+    static const gint grids[3][2] = {{80, 80}, {40, 40}, {20, 20}};
+
+    GArray *boxes   = g_array_new(FALSE, FALSE, sizeof(gfloat));   /* [x,y,w,h] */
+    GArray *scores  = g_array_new(FALSE, FALSE, sizeof(gfloat));
+    GArray *class_ids = g_array_new(FALSE, FALSE, sizeof(gint));
+
+    /* 三层解码 */
+    for (gint layer = 0; layer < 3; layer++) {
+        decode_yolov5_layer(
+            outputs[layer],
+            self->anchors[layer],
+            grids[layer][0], grids[layer][1],
+            strides[layer],
+            self->num_classes > 0 ? self->num_classes : 1,
+            self->threshold,
+            boxes, scores, class_ids);
+    }
+
+    gint valid_count = boxes->len / 4;
+    if (valid_count <= 0) {
+        g_array_free(boxes, TRUE);
+        g_array_free(scores, TRUE);
+        g_array_free(class_ids, TRUE);
+        return NULL;
+    }
+
+    /* 按置信度降序排列 */
+    GArray *indices = g_array_new(FALSE, FALSE, sizeof(gint));
+    g_array_set_size(indices, valid_count);
+    for (gint i = 0; i < valid_count; i++)
+        g_array_index(indices, gint, i) = i;
+
+    quick_sort_desc((gfloat *)scores->data,
+                    (gint *)indices->data, 0, valid_count - 1);
+
+    /* NMS */
+    run_nms(boxes, (gfloat *)scores->data,
+            (gint *)indices->data, valid_count, self->nms_threshold);
+
+    /* 构建最终结果 */
+    GArray *results = g_array_new(FALSE, TRUE,
+        sizeof(gfloat) * 6 + sizeof(gchar *));  /* 不使用混合 struct, 分拆存储 */
+
+    /* 改用固定 struct */
+    typedef struct {
+        gfloat x1, y1, x2, y2;
+        gfloat confidence;
+        gint class_id;
+        gchar class_name[64];
+    } DetectionBox;
+
+    GArray *detections = g_array_new(FALSE, TRUE, sizeof(DetectionBox));
+
+    for (gint i = 0; i < valid_count; i++) {
+        if (g_array_index(indices, gint, i) == -1)
+            continue;
+        gint n = g_array_index(indices, gint, i);
+        gfloat score = g_array_index(scores, gfloat, n);
+        if (score < self->threshold)
+            continue;
+
+        gfloat *b = &g_array_index(boxes, gfloat, n * 4);
+        DetectionBox det;
+        det.x1 = b[0];
+        det.y1 = b[1];
+        det.x2 = b[0] + b[2];
+        det.y2 = b[1] + b[3];
+        det.confidence = score;
+        det.class_id = g_array_index(class_ids, gint, n);
+
+        /* 类别名称 */
+        if (self->labels && det.class_id < self->num_classes) {
+            g_strlcpy(det.class_name, self->labels[det.class_id],
+                      sizeof(det.class_name));
+        } else {
+            g_snprintf(det.class_name, sizeof(det.class_name),
+                       "class_%d", det.class_id);
+        }
+
+        g_array_append_val(detections, det);
+    }
+
+    g_array_free(boxes, TRUE);
+    g_array_free(scores, TRUE);
+    g_array_free(class_ids, TRUE);
+    g_array_free(indices, TRUE);
+    g_array_free(results, TRUE);
+
+    return detections;
 }
 
 /* ── GstVideoFilter 核心: transform_frame_ip ───────────── */
-/*
- * 每帧调用一次, 在帧数据上直接做 NPU 推理。
- * 这是 GStreamer 管道的核心处理函数。
- */
 static GstFlowReturn
 gst_rknn_inference_transform_frame_ip(GstVideoFilter *filter,
                                       GstVideoFrame *frame)
 {
     GstRknnInference *self = GST_RKNN_INFERENCE(filter);
-    GstVideoInfo *info = &frame->info;
-    gint width = GST_VIDEO_INFO_WIDTH(info);
-    gint height = GST_VIDEO_INFO_HEIGHT(info);
     gint ret;
 
     self->frame_count++;
 
-    /* 隔帧检测: 非检测帧复用上一帧结果 */
+    /* 隔帧检测 */
     if (self->interval > 1 &&
         self->frame_count % self->interval != 0) {
         return GST_FLOW_OK;
     }
 
-    /* ── 准备 RKNN 输入 ── */
+    /* ── 预处理 ── */
+    preprocess_frame(self, frame);
+
     gint input_size = self->model_width * self->model_height *
                       self->model_channels;
-    guchar *input_data = (guchar *)g_malloc(input_size);
-
-    preprocess_frame(self, frame, input_data);
 
     memset(self->inputs, 0, sizeof(self->inputs));
     self->inputs[0].index = 0;
     self->inputs[0].type = RKNN_TENSOR_UINT8;
     self->inputs[0].size = input_size;
     self->inputs[0].fmt = RKNN_TENSOR_NHWC;
-    self->inputs[0].buf = input_data;
+    self->inputs[0].buf = self->prealloc_input;
 
     ret = rknn_inputs_set(self->ctx, 1, self->inputs);
     if (ret < 0) {
         GST_ERROR_OBJECT(self, "rknn_inputs_set failed! ret=%d", ret);
-        g_free(input_data);
         return GST_FLOW_ERROR;
     }
 
@@ -378,7 +659,6 @@ gst_rknn_inference_transform_frame_ip(GstVideoFilter *filter,
     ret = rknn_run(self->ctx, NULL);
     if (ret < 0) {
         GST_ERROR_OBJECT(self, "rknn_run failed! ret=%d", ret);
-        g_free(input_data);
         return GST_FLOW_ERROR;
     }
 
@@ -392,30 +672,64 @@ gst_rknn_inference_transform_frame_ip(GstVideoFilter *filter,
     ret = rknn_outputs_get(self->ctx, 3, self->outputs, NULL);
     if (ret < 0) {
         GST_ERROR_OBJECT(self, "rknn_outputs_get failed! ret=%d", ret);
-        g_free(input_data);
         return GST_FLOW_ERROR;
     }
 
-    /* ── 后处理 ── */
+    /* ── 后处理 (完整的 YOLOv5 decode + NMS) ── */
     gfloat *output_buffs[3];
     for (gint i = 0; i < 3; i++)
         output_buffs[i] = (gfloat *)self->outputs[i].buf;
 
-    g_mutex_lock(&self->result_mutex);
-    if (self->last_results)
-        g_array_free(self->last_results, TRUE);
+    GstVideoInfo *info = &frame->info;
+    gint orig_w = GST_VIDEO_INFO_WIDTH(info);
+    gint orig_h = GST_VIDEO_INFO_HEIGHT(info);
 
-    self->last_results = g_array_new(FALSE, TRUE, sizeof(DetectionBox));
-    postprocess_yolov5(self, output_buffs, width, height,
-                       self->last_results);
-    g_mutex_unlock(&self->result_mutex);
+    GArray *detections = postprocess_yolov5_full(self, output_buffs,
+                                                   orig_w, orig_h);
+
+    /* ── 附加检测结果到 GstBuffer (GstMeta) ── */
+    if (detections && detections->len > 0) {
+        GstBuffer *buffer = gst_video_frame_get_buffer(frame);
+        if (buffer) {
+            RknnDetectionMeta *meta = (RknnDetectionMeta *)
+                gst_buffer_add_meta(buffer, RKNN_DETECTION_META_INFO, NULL);
+
+            if (meta) {
+                meta->num_detections = detections->len;
+                meta->boxes = g_new0(gfloat, detections->len * 6);
+                meta->class_names = g_new0(gchar *, detections->len);
+
+                typedef struct {
+                    gfloat x1, y1, x2, y2;
+                    gfloat confidence;
+                    gint class_id;
+                    gchar class_name[64];
+                } DetectionBox;
+
+                for (guint i = 0; i < detections->len; i++) {
+                    DetectionBox *det = &g_array_index(detections,
+                                                       DetectionBox, i);
+                    meta->boxes[i * 6 + 0] = det->x1;
+                    meta->boxes[i * 6 + 1] = det->y1;
+                    meta->boxes[i * 6 + 2] = det->x2;
+                    meta->boxes[i * 6 + 3] = det->y2;
+                    meta->boxes[i * 6 + 4] = det->confidence;
+                    meta->boxes[i * 6 + 5] = (gfloat)det->class_id;
+                    meta->class_names[i] = g_strdup(det->class_name);
+                }
+            }
+        }
+    }
+
+    if (detections)
+        g_array_free(detections, TRUE);
 
     /* ── 释放 RKNN 输出 ── */
     rknn_outputs_release(self->ctx, 3, self->outputs);
-    g_free(input_data);
 
-    GST_LOG_OBJECT(self, "Frame %d: %d detections",
-                   self->frame_count, self->last_results->len);
+    if (self->frame_count % 100 == 0) {
+        GST_INFO_OBJECT(self, "Frame %d processed", self->frame_count);
+    }
 
     return GST_FLOW_OK;
 }
@@ -486,11 +800,6 @@ static void gst_rknn_inference_finalize(GObject *object)
 {
     GstRknnInference *self = GST_RKNN_INFERENCE(object);
 
-    g_mutex_clear(&self->result_mutex);
-
-    if (self->last_results)
-        g_array_free(self->last_results, TRUE);
-
     if (self->ctx)
         rknn_destroy(self->ctx);
 
@@ -502,6 +811,8 @@ static void gst_rknn_inference_finalize(GObject *object)
             g_free(self->labels[i]);
         g_free(self->labels);
     }
+
+    g_free(self->prealloc_input);
 
     G_OBJECT_CLASS(gst_rknn_inference_parent_class)->finalize(object);
 }
@@ -515,6 +826,14 @@ static gboolean gst_rknn_inference_start(GstBaseTransform *trans)
         return FALSE;
     }
 
+    /* 初始化 YOLOv5 COCO anchors */
+    static const gfloat default_anchors[3][6] = {
+        {10.0f, 13.0f, 16.0f, 30.0f, 33.0f, 23.0f},
+        {30.0f, 61.0f, 62.0f, 45.0f, 59.0f, 119.0f},
+        {116.0f, 90.0f, 156.0f, 198.0f, 373.0f, 326.0f}
+    };
+    memcpy(self->anchors, default_anchors, sizeof(default_anchors));
+
     /* 加载标签 */
     load_labels(self);
 
@@ -523,7 +842,6 @@ static gboolean gst_rknn_inference_start(GstBaseTransform *trans)
         return FALSE;
 
     self->frame_count = 0;
-    self->last_results = NULL;
 
     GST_INFO_OBJECT(self, "RKNN inference element started");
     return TRUE;
@@ -601,7 +919,6 @@ static void gst_rknn_inference_class_init(GstRknnInferenceClass *klass)
                          (GParamFlags)(G_PARAM_READWRITE |
                                        G_PARAM_STATIC_STRINGS)));
 
-    /* 元素元数据 */
     gst_element_class_set_static_metadata(
         element_class,
         "RKNN NPU Inference",
@@ -609,7 +926,6 @@ static void gst_rknn_inference_class_init(GstRknnInferenceClass *klass)
         "Run YOLOv5 object detection on Rockchip NPU via RKNN API",
         "Edge AI Vision Project");
 
-    /* 支持的输入格式 */
     gst_element_class_add_pad_template(
         element_class,
         gst_pad_template_new("src", GST_PAD_SRC, GST_PAD_ALWAYS,
@@ -634,17 +950,15 @@ static void gst_rknn_inference_init(GstRknnInference *self)
 {
     self->model_path = NULL;
     self->labels_path = NULL;
-    self->threshold = 0.3;
-    self->nms_threshold = 0.45;
+    self->threshold = 0.3f;
+    self->nms_threshold = 0.45f;
     self->interval = 1;
     self->ctx = 0;
     self->frame_count = 0;
-    self->last_results = NULL;
     self->labels = NULL;
     self->num_classes = 0;
     self->avg_inference_ms = 0.0;
-
-    g_mutex_init(&self->result_mutex);
+    self->prealloc_input = NULL;
 }
 
 /* ── 插件注册 ──────────────────────────────────────────── */
@@ -653,6 +967,14 @@ static gboolean plugin_init(GstPlugin *plugin)
     GST_DEBUG_CATEGORY_INIT(rknn_inference_debug,
                             "rknninference", 0,
                             "RKNN NPU Inference Element");
+
+    /* 注册自定义 GstMeta 类型 */
+    gst_meta_register(RKNN_DETECTION_META_API_TYPE,
+                      "RknnDetectionMeta",
+                      sizeof(RknnDetectionMeta),
+                      rknn_detection_meta_init,
+                      rknn_detection_meta_free,
+                      NULL);
 
     return gst_element_register(plugin, "rknninference",
                                 GST_RANK_NONE,

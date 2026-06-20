@@ -3,7 +3,8 @@
 # Edge Device Manager Service — 边缘设备管理
 #
 # PC 端 (ISG-mian) 中管理边缘设备的 Service。
-# 通过 gRPC 与边缘设备通信，通过 MQTT 接收检测结果。
+# 通过 JSON-RPC (SSH + UNIX socket) 与边缘设备通信，
+# 通过 MQTT 接收检测结果。
 #
 # 功能:
 #   - 设备注册/发现
@@ -17,7 +18,9 @@ from __future__ import annotations
 import time
 import threading
 from dataclasses import dataclass
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
+
+from backend.edge_client import EdgeClient, DeviceStatus
 
 
 @dataclass
@@ -127,28 +130,24 @@ class EdgeManagerService:
             return {"status": "error",
                     "message": f"Model too large: {file_size} bytes (max {max_size})"}
 
-        try:
-            with open(model_path, "rb") as f:
-                model_data = f.read()
-        except (FileNotFoundError, OSError) as e:
-            return {"status": "error",
-                    "message": f"Cannot read model file: {e}"}
-
         print(f"[EdgeManager] Pushing model to {device_id}: {model_path} "
-              f"({len(model_data)} bytes)")
+              f"({len(open(model_path, 'rb').read())} bytes)")
 
-        # TODO: gRPC call — PushModel
-        # stub = EdgeServiceStub(grpc.insecure_channel(f"{device.host}:{device.grpc_port}"))
-        # response = stub.PushModel(ModelRequest(
-        #     device_id=device_id,
-        #     model_data=model_data,
-        #     model_version=model_version,
-        # ))
-        # return {"status": "success", "model_version": response.model_version}
+        # 通过 EdgeClient JSON-RPC 推送模型
+        try:
+            client = EdgeClient(device.host)
+            model_name = os.path.basename(model_path)
+            resp = client.push_model(model_path, model_name)
+            if resp.get("status") == 0:
+                device.model_version = model_version or model_name
+                return {"status": "success",
+                        "model_name": model_name}
+            return resp
+        except Exception as e:
+            return {"status": "error",
+                    "message": f"Model push failed: {e}"}
 
-        return {"status": "success", "message": "Model pushed (gRPC not yet connected)"}
-
-    # ── 场景切换 (via gRPC) ───────────────────────────────
+    # ── 场景切换 (via JSON-RPC) ──────────────────────────────
     def switch_scene(self, device_id: str, scene_name: str) -> dict:
         """切换边缘设备推理场景"""
         device = self._devices.get(device_id)
@@ -161,10 +160,19 @@ class EdgeManagerService:
 
         print(f"[EdgeManager] Switching scene: {device_id} → {scene_name}")
 
-        # TODO: gRPC call — SwitchScene
-        device.scene = scene_name
-
-        return {"status": "success", "scene": scene_name}
+        # 通过 EdgeClient JSON-RPC 切换场景
+        try:
+            client = EdgeClient(device.host)
+            resp = client.switch_scene(scene_name)
+            if resp.get("status") == 0:
+                device.scene = scene_name
+                return {"status": "success", "scene": scene_name}
+            return resp
+        except Exception as e:
+            # 降级: 本地更新场景标记
+            device.scene = scene_name
+            return {"status": "success", "scene": scene_name,
+                    "warning": f"Device unreachable, local state only: {e}"}
 
     # ── 心跳处理 (via MQTT callback) ──────────────────────
     def on_heartbeat_received(self, device_id: str, payload: dict):
@@ -210,5 +218,12 @@ class EdgeManagerService:
 
         print(f"[EdgeManager] Restarting device: {device_id}")
 
-        # TODO: gRPC call — Restart
-        return {"status": "success", "message": "Restart command sent"}
+        try:
+            client = EdgeClient(device.host)
+            resp = client.restart()
+            if resp.get("status") == 0:
+                device.status = "restarting"
+            return resp
+        except Exception as e:
+            return {"status": "error",
+                    "message": f"Restart failed: {e}"}

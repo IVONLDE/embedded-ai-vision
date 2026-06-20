@@ -42,3 +42,4 @@ output/
 # Logs
 *.log
 logs/
+edge/build_aarch64/

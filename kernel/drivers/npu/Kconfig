@@ -1,0 +1,22 @@
+# RK3399Pro NPU Driver — Kconfig/Makefile
+
+config EDGE_AI_NPU
+	tristate "RK3399Pro NPU Driver"
+	depends on ARCH_ROCKCHIP || COMPILE_TEST
+	select DMA_CMA
+	select DMA_SHARED_BUFFER
+	help
+	  Rockchip RK3399Pro Neural Processing Unit (NPU) driver.
+	  This enables the /dev/rknpu misc device for AI inference
+	  acceleration on the RK1808 NPU IP core.
+
+	  The NPU provides:
+	    - 3.0 TOPS INT8 peak performance
+	    - 1920 MAC units @ 800MHz
+	    - 256KB on-chip SRAM
+	    - Support for CNN, RNN, LSTM networks
+
+	  To compile this driver as a module, choose M here:
+	  the module will be called rknpu.
+
+	  If unsure, say Y.

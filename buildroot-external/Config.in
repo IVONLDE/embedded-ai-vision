@@ -7,3 +7,8 @@ source "$BR2_EXTERNAL_EMBEDDED_AI_VISION_PATH/package/rknn-driver/Config.in"
 source "$BR2_EXTERNAL_EMBEDDED_AI_VISION_PATH/package/camera-sensor/Config.in"
 
 endmenu
+source "$BR2_EXTERNAL_EMBEDDED_AI_VISION_PATH/package/edge-ai-app/Config.in"
+source "$BR2_EXTERNAL_EMBEDDED_AI_VISION_PATH/package/rknn-driver/Config.in"
+source "$BR2_EXTERNAL_EMBEDDED_AI_VISION_PATH/package/camera-sensor/Config.in"
+
+endmenu
