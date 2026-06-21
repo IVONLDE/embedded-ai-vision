@@ -9,8 +9,8 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ Layer 5: 通信层 (训练端/PC管控)                           │
-│   gRPC: 模型推送/场景切换/状态查询                         │
-│   MQTT: 检测结果上报/心跳/远程指令                         │
+│   gRPC: 模型推送/场景切换/状态查询/OTA升级/版本回滚 (8 RPC)   │
+│   MQTT: 检测结果上报/心跳/远程指令/OTA状态                     │
 │   Proto: Protobuf 序列化 + JSON fallback                  │
 ├─────────────────────────────────────────────────────────┤
 │ Layer 4: 应用层 (C++ 边缘推理)                            │
@@ -124,4 +124,4 @@ embedded-ai-vision/
 | OpenCV | ≥3.4 | 图像预处理 |
 | yaml-cpp | ≥0.6 | YAML 配置解析 |
 | libsystemd | ≥237 | systemd notify/watchdog |
-| gRPC/Protobuf | ≥1.30 | 远程管控 (开发中) |
+| gRPC/Protobuf | ≥1.16 | 远程管控 (8 RPC: 推理管控 + OTA) |

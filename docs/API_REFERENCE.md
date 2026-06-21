@@ -106,7 +106,8 @@ printf("推理耗时: %llu ns\n", perf.run_end - perf.run_start);
 import grpc
 from edge_service_pb2 import (
     ModelRequest, SceneRequest, StatusRequest,
-    ConfigRequest, RestartRequest
+    ConfigRequest, RestartRequest,
+    VersionInfoRequest, AppUpdateRequest, RollbackRequest
 )
 from edge_service_pb2_grpc import EdgeServiceStub
 
@@ -114,7 +115,9 @@ from edge_service_pb2_grpc import EdgeServiceStub
 channel = grpc.insecure_channel('192.168.1.50:50051')
 stub = EdgeServiceStub(channel)
 
-# 推送模型
+# ── 推理管控 ──────────────────────────────────────────
+
+# 推送模型 (含版本号和自动回滚)
 with open('yolov5_vehicle.rknn', 'rb') as f:
     model_data = f.read()
 
@@ -126,8 +129,10 @@ response = stub.PushModel(ModelRequest(
     model_data=model_data,
     sha256_checksum=sha256,
     model_name='yolov5_vehicle',
+    model_version='v2.0',
+    auto_rollback=True,
 ))
-print(f"推送结果: status={response.status}, message={response.message}")
+print(f"推送结果: status={response.status}, version={response.model_version}")
 
 # 切换场景
 response = stub.SwitchScene(SceneRequest(
@@ -136,12 +141,13 @@ response = stub.SwitchScene(SceneRequest(
 ))
 print(f"场景切换: {response.active_scene}")
 
-# 查询状态
+# 查询状态 (含应用版本)
 response = stub.GetStatus(StatusRequest(
     device_id='rk3399pro-edge-001',
 ))
 print(f"FPS: {response.fps}, NPU: {response.npu_usage}%, "
-      f"温度: {response.cpu_temp}°C, 推理: {response.avg_inference_ms}ms")
+      f"温度: {response.cpu_temp}°C, 推理: {response.avg_inference_ms}ms, "
+      f"版本: {response.app_version}")
 
 # 更新配置
 response = stub.UpdateConfig(ConfigRequest(
@@ -153,21 +159,63 @@ response = stub.UpdateConfig(ConfigRequest(
 response = stub.Restart(RestartRequest(
     device_id='rk3399pro-edge-001',
 ))
+
+# ── OTA 管理 ──────────────────────────────────────────
+
+# 查询版本信息
+response = stub.GetVersionInfo(VersionInfoRequest(
+    device_id='rk3399pro-edge-001',
+))
+print(f"应用: {response.app_version}, 模型: {response.model_version}, "
+      f"可回滚: {response.rollback_available}")
+
+# 推送应用更新
+with open('edge-ai-camera', 'rb') as f:
+    app_data = f.read()
+app_sha256 = hashlib.sha256(app_data).hexdigest()
+
+response = stub.PushAppUpdate(AppUpdateRequest(
+    device_id='rk3399pro-edge-001',
+    app_data=app_data,
+    sha256_checksum=app_sha256,
+    app_version='1.1.0',
+    auto_rollback=True,
+))
+print(f"应用更新: status={response.status}, 需重启: {response.needs_restart}")
+
+# 版本回滚
+response = stub.Rollback(RollbackRequest(
+    device_id='rk3399pro-edge-001',
+    target_type='model',
+))
+print(f"回滚: {response.rolled_back_version}, 需重启: {response.needs_restart}")
 ```
 
 ### 命令行调用 (grpcurl)
 
 ```bash
 # 查询状态
-grpcurl -plaintext 192.168.1.50:50051 EdgeService/GetStatus \
+grpcurl -plaintext 192.168.1.50:50051 edge_ai.EdgeService/GetStatus \
     -d '{"device_id": "rk3399pro-edge-001"}'
 
 # 切换场景
-grpcurl -plaintext 192.168.1.50:50051 EdgeService/SwitchScene \
+grpcurl -plaintext 192.168.1.50:50051 edge_ai.EdgeService/SwitchScene \
     -d '{"device_id": "rk3399pro-edge-001", "scene_name": "vehicle"}'
 
+# 查询版本信息
+grpcurl -plaintext 192.168.1.50:50051 edge_ai.EdgeService/GetVersionInfo \
+    -d '{"device_id": "rk3399pro-edge-001"}'
+
+# 版本回滚
+grpcurl -plaintext 192.168.1.50:50051 edge_ai.EdgeService/Rollback \
+    -d '{"device_id": "rk3399pro-edge-001", "target_type": "model"}'
+
+# 重启服务
+grpcurl -plaintext 192.168.1.50:50051 edge_ai.EdgeService/Restart \
+    -d '{"device_id": "rk3399pro-edge-001"}'
+
 # 通过 Unix Socket
-grpcurl -plaintext -unix /tmp/edge-ai-grpc.sock EdgeService/GetStatus \
+grpcurl -plaintext -unix /tmp/edge-ai-grpc.sock edge_ai.EdgeService/GetStatus \
     -d '{"device_id": "rk3399pro-edge-001"}'
 ```
 

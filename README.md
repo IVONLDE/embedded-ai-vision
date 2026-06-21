@@ -102,17 +102,17 @@ embedded-ai-vision/
 │       └── gstrknndraw.c        # 检测框绘制元素
 │
 ├── edge/                 # Layer 4: C++ 边缘 AI 推理应用
-│   ├── config/           #   pipeline.yaml + systemd unit
-│   ├── proto/            #   gRPC + Protobuf 协议定义
+│   ├── config/           #   pipeline.yaml + systemd unit + avahi mDNS
+│   ├── proto/            #   gRPC + Protobuf 协议定义 (8 RPC)
 │   └── src/
 │       ├── main.cpp              # 主入口 (YAML + CLI)
 │       ├── pipeline/             # 四线程流水线调度器
 │       ├── inference/
-│       │   ├── rknn1_engine.cpp  # RKNN1 API 推理引擎 (模型无关)
+│       │   ├── rknn1_engine.cpp  # RKNN1 API 推理引擎 (模型无关, 支持热加载)
 │       │   ├── yolov5/           # YOLOv5 后处理 (decode + NMS)
 │       │   └── deepsort/         # SORT 跟踪 (卡尔曼 + 匈牙利)
 │       ├── io/                   # V4L2 DMA-BUF 采集 / 文件输入
-│       └── comm/                 # MQTT 上报 / gRPC 服务
+│       └── comm/                 # MQTT 上报 / gRPC 服务 (8 RPC) / OTA 管理
 │
 ├── training/             # Layer 5: PC 端管理平台 (ISG-mian)
 │   ├── backend/services/ #   模型导出 + 边缘设备管理
@@ -205,7 +205,7 @@ embedded-ai-vision/
 | **SORT 跟踪** | 卡尔曼滤波 + 匈牙利匹配 (纯CPU, 单核NPU适配) | `edge/src/inference/deepsort/` |
 | **V4L2 DMA-BUF** | 摄像头→NPU 零拷贝采集 (mmap / VIDIOC_EXPBUF) | `edge/src/io/` |
 | **MQTT** | 检测结果 + 心跳上报 (libmosquitto / QoS 0/1) | `edge/src/comm/` |
-| **gRPC** | 模型推送 / 场景切换 / 远程管控 (Proto3) | `edge/src/comm/` + `edge/proto/` |
+| **gRPC** | 模型推送 / 场景切换 / OTA升级 / 远程管控 (8 RPC, Proto3) | `edge/src/comm/` + `edge/proto/` |
 | **systemd** | 服务托管 (Type=notify / cgroups / 看门狗 / 安全加固) | `edge/config/` |
 | **Buildroot** | 交叉编译 / rootfs 裁剪 / SD 卡镜像 | `buildroot-external/` |
 | **RKNN-Toolkit1** | PyTorch → ONNX → RKNN 导出 + INT8 量化 | `training/scripts/` |
@@ -221,9 +221,9 @@ C (内核驱动 + GStreamer):         2,950 行
 C++ (推理应用):                   2,886 行
 头文件 (.h):                        670 行
 DTS (设备树):                       465 行
-Proto (gRPC/Protobuf):             123 行
+Proto (gRPC/Protobuf):             ~182 行 (edge_service.proto + detection.proto)
 ─────────────────────────────────────────
-C/C++/DTS/Proto 总计:             7,094 行
+C/C++/DTS/Proto 总计:             ~7,153 行
 
 Python (PC 端管理平台):         ~40,000 行
 QML (GUI):                       ~3,000 行

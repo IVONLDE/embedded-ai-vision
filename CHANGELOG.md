@@ -9,6 +9,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - 文档完善：新增 DEVELOPMENT.md、CONTRIBUTING.md、CHANGELOG.md、API_REFERENCE.md、TESTING.md
 - 文档完善：training/README.md 重写，training/docs/BACKEND_ARCHITECTURE.md 新增
+- gRPC 服务端完整实现（EdgeServiceImpl），支持 8 个 RPC：
+  - PushModel：模型二进制推送 + SHA256 校验 + 热加载
+  - SwitchScene：场景切换（face/body/vehicle/defect）
+  - GetStatus：设备状态查询（FPS/NPU/温度/内存等）
+  - UpdateConfig：运行时配置更新
+  - Restart：远程重启服务
+  - GetVersionInfo：OTA 版本查询
+  - PushAppUpdate：应用二进制 OTA 升级
+  - Rollback：模型/应用版本回滚
+- Avahi/mDNS 服务发现配置（_edge-ai._tcp）
+- CMake proto 自动编译规则，支持 pkg-config 降级查找 gRPC
+
+### Fixed
+- RKNN1 引擎兼容性：rknn_init2 改为 rknn_init，适配 API 1.7.5 + DRV 1.7.5 匹配，避免 TOO_MANY_CLIENT 错误
+- dump_tensor_attr 安全打印，避免未终止字符串问题
 
 ## [1.2.0] - 2026-06-XX
 

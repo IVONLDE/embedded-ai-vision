@@ -295,7 +295,23 @@ mosquitto_sub -h 192.168.1.50 -t 'edge/rk3399pro-edge-001/detections' -v
 
 ```bash
 # 查询设备状态
-grpcurl -plaintext 192.168.1.50:50051 EdgeService/GetStatus \
+grpcurl -plaintext 192.168.1.50:50051 edge_ai.EdgeService/GetStatus \
+    -d '{"device_id": "rk3399pro-edge-001"}'
+
+# 切换场景
+grpcurl -plaintext 192.168.1.50:50051 edge_ai.EdgeService/SwitchScene \
+    -d '{"device_id": "rk3399pro-edge-001", "scene_name": "vehicle"}'
+
+# 查询版本信息 (OTA)
+grpcurl -plaintext 192.168.1.50:50051 edge_ai.EdgeService/GetVersionInfo \
+    -d '{"device_id": "rk3399pro-edge-001"}'
+
+# 版本回滚
+grpcurl -plaintext 192.168.1.50:50051 edge_ai.EdgeService/Rollback \
+    -d '{"device_id": "rk3399pro-edge-001", "target_type": "model"}'
+
+# 重启服务
+grpcurl -plaintext 192.168.1.50:50051 edge_ai.EdgeService/Restart \
     -d '{"device_id": "rk3399pro-edge-001"}'
 
 # 期望返回：
@@ -305,6 +321,7 @@ grpcurl -plaintext 192.168.1.50:50051 EdgeService/GetStatus \
 #   "scene": "vehicle",
 #   "fps": 25.0,
 #   "npu_usage": 85.0,
+#   "app_version": "1.0.0",
 #   ...
 # }
 ```
