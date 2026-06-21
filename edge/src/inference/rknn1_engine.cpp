@@ -115,8 +115,9 @@ int Rknn1Engine::load_model(const char *model_path)
     }
 
     /* RKNN1 API: rknn_init
-     * 使用 RKNN_FLAG_COLLECT_PERF_MASK 开启性能统计 */
-    ret = rknn_init2(&_ctx, model_data, model_len,
+     * 使用 RKNN_FLAG_COLLECT_PERF_MASK 开启性能统计
+     * 需要 API 1.7.5 + DRV 1.7.5 匹配，否则会报 TOO_MANY_CLIENT */
+    ret = rknn_init(&_ctx, model_data, model_len,
                     RKNN_FLAG_COLLECT_PERF_MASK, NULL);
     free(model_data);
 
@@ -124,11 +125,15 @@ int Rknn1Engine::load_model(const char *model_path)
         fprintf(stderr, "[RKNN1] rknn_init fail! ret=%d\n", ret);
         return -1;
     }
+    printf("[RKNN1] rknn_init OK, ret=%d, ctx=%p\n", ret, (void*)_ctx);
+    fflush(stdout);
 
     /* 查询 SDK 版本 */
     rknn_sdk_version version;
     ret = rknn_query(_ctx, RKNN_QUERY_SDK_VERSION, &version,
                      sizeof(rknn_sdk_version));
+    printf("[RKNN1] query SDK version: ret=%d\n", ret);
+    fflush(stdout);
     if (ret >= 0) {
         printf("[RKNN1] SDK: api=%s, driver=%s\n",
                version.api_version, version.drv_version);
@@ -137,8 +142,12 @@ int Rknn1Engine::load_model(const char *model_path)
     /* 查询输入属性 */
     memset(_input_attrs, 0, sizeof(_input_attrs));
     _input_attrs[0].index = 0;
+    printf("[RKNN1] querying input attr, sizeof=%zu...\n", sizeof(rknn_tensor_attr));
+    fflush(stdout);
     ret = rknn_query(_ctx, RKNN_QUERY_INPUT_ATTR,
                      &_input_attrs[0], sizeof(rknn_tensor_attr));
+    printf("[RKNN1] query input attr done: ret=%d\n", ret);
+    fflush(stdout);
     if (ret < 0) {
         fprintf(stderr, "[RKNN1] query input attr fail! ret=%d\n", ret);
         rknn_destroy(_ctx);
@@ -165,7 +174,8 @@ int Rknn1Engine::load_model(const char *model_path)
     }
 
     _model_loaded = true;
-    printf("[RKNN1] Model loaded successfully\n");
+    printf("[RKNN1] Model loaded successfully (n_output=%d)\n", _n_output);
+    fflush(stdout);
     return 0;
 }
 
@@ -222,8 +232,8 @@ int Rknn1Engine::hot_reload_model(const char *new_model_path)
         return -1;
     }
 
-    /* 初始化新 context */
-    ret = rknn_init2(&new_ctx, model_data, model_len,
+    /* 初始化新 context (热加载也开启性能统计) */
+    ret = rknn_init(&new_ctx, model_data, model_len,
                     RKNN_FLAG_COLLECT_PERF_MASK, NULL);
     free(model_data);
 
@@ -450,16 +460,19 @@ float Rknn1Engine::cal_performance(std::queue<float> &history,
 /* ── 调试: 打印 tensor 属性 ────────────────────────────── */
 void Rknn1Engine::dump_tensor_attr(rknn_tensor_attr *attr)
 {
+    /* 安全打印 name: 确保 null-terminated */
+    char safe_name[64];
+    snprintf(safe_name, sizeof(safe_name), "%s", attr->name);
+
     printf("  index=%d, name=%s, n_dims=%d, dims=[%d,%d,%d,%d], "
-           "n_elems=%d, size=%d, fmt=%s, type=%s, qnt_type=%s, "
+           "n_elems=%d, size=%d, fmt=%d, type=%d, qnt_type=%d, "
            "zp=%d, scale=%f\n",
-           attr->index, attr->name, attr->n_dims,
+           attr->index, safe_name, attr->n_dims,
            attr->dims[0], attr->dims[1], attr->dims[2], attr->dims[3],
            attr->n_elems, attr->size,
-           get_format_string(attr->fmt),
-           get_type_string(attr->type),
-           get_qnt_type_string(attr->qnt_type),
+           (int)attr->fmt, (int)attr->type, (int)attr->qnt_type,
            attr->zp, attr->scale);
+    fflush(stdout);
 }
 
 /* ── 辅助: 格式/类型字符串 ─────────────────────────────── */
