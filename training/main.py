@@ -682,71 +682,154 @@ class BackendService(QObject):
         self._start_telemetry_poll()
 
     def _start_telemetry_poll(self):
-        """启动后台遥测轮询 (SSH 读取板子 CPU 温度、NPU 使用率)"""
+        """启动后台遥测轮询 (SSH 读取板子完整系统信息)"""
         if self._telemetry_thread and self._telemetry_thread.is_alive():
             return
 
+        _TELEMETRY_SCRIPT = r"""
+# ---- 系统基本信息 ----
+echo "SECTION:system"
+cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null
+cat /sys/class/thermal/thermal_zone1/temp 2>/dev/null
+cat /sys/class/devfreq/ff9a0000.gpu/cur_freq 2>/dev/null
+cat /sys/class/devfreq/ff9a0000.gpu/max_freq 2>/dev/null
+free -m | awk 'NR==2{print $2,$3,$4,$7}'
+df -h / | awk 'NR==2{print $2,$3,$4,$5}'
+cat /proc/loadavg | awk '{print $1,$2,$3}'
+cat /proc/uptime | awk '{print int($1)}'
+# 推理进程 CPU%/MEM%
+ps aux | grep edge-ai-camera | grep -v grep | awk '{sum_cpu+=$3; sum_mem+=$4} END{print sum_cpu, sum_mem}'
+
+# ---- 硬件信息 (只读一次) ----
+echo "SECTION:hardware"
+cat /proc/cpuinfo | grep -c processor 2>/dev/null
+uname -r 2>/dev/null
+cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2 2>/dev/null
+cat /proc/cpuinfo | grep 'CPU part' | head -1 | awk '{print $3}' 2>/dev/null
+ls /dev/video* 2>/dev/null | wc -l
+ls /dev/ttyS* /dev/ttyUSB* 2>/dev/null | tr '\n' ' '
+echo ""
+ls /dev/i2c-* 2>/dev/null | tr '\n' ' '
+echo ""
+lsusb 2>/dev/null | wc -l
+"""
+
         def poll_loop():
             import subprocess
-            while not self._telemetry_stop.wait(5.0):  # 每5秒
+            import time as _time
+            while not self._telemetry_stop.wait(5.0):
                 try:
-                    # 获取所有已注册设备
                     devices = self._bridge.facade.edge_service.list_devices()
                     for dev in devices:
                         host = dev.get("host", "")
                         did = dev.get("device_id", "")
-                        if not host or dev.get("status") not in ("online", "offline"):
+                        if not host:
                             continue
-
-                        # SSH 读取 CPU 温度和 NPU/GPU 使用率
                         try:
                             r = subprocess.run(
-                                ["ssh", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
+                                ["ssh", "-o", "ConnectTimeout=3",
+                                 "-o", "StrictHostKeyChecking=no",
                                  f"toybrick@{host}",
-                                 # CPU 温度 (thermal_zone0)
-                                 "cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null; "
-                                 # GPU 当前频率 (代替 NPU)
-                                 "cat /sys/class/devfreq/ff9a0000.gpu/cur_freq 2>/dev/null; "
-                                 # GPU 最大频率
-                                 "cat /sys/class/devfreq/ff9a0000.gpu/max_freq 2>/dev/null"],
-                                capture_output=True, text=True, timeout=5,
+                                 _TELEMETRY_SCRIPT],
+                                capture_output=True, text=True, timeout=8,
                             )
-                            if r.returncode == 0 and r.stdout.strip():
-                                lines = r.stdout.strip().split('\n')
-                                cpu_temp = 0.0
-                                npu_usage = 0.0
+                            if r.returncode != 0 or not r.stdout.strip():
+                                continue
 
-                                # CPU 温度 (单位: 毫度 → 度)
-                                if len(lines) >= 1 and lines[0].strip().isdigit():
-                                    cpu_temp = int(lines[0].strip()) / 1000.0
+                            sections = {}
+                            cur_section = None
+                            for line in r.stdout.strip().split('\n'):
+                                if line.startswith("SECTION:"):
+                                    cur_section = line[8:]
+                                    sections[cur_section] = []
+                                elif cur_section:
+                                    sections[cur_section].append(line.strip())
 
-                                # NPU 使用率 (当前频率 / 最大频率)
-                                if len(lines) >= 3:
-                                    cur = int(lines[1].strip()) if lines[1].strip().isdigit() else 0
-                                    mx = int(lines[2].strip()) if lines[2].strip().isdigit() else 1
-                                    if mx > 0:
-                                        npu_usage = round(cur / mx * 100, 1)
+                            sys_lines = sections.get("system", [])
+                            hw_lines = sections.get("hardware", [])
 
-                                fps = self._fps_estimate.get(did, 0.0)
+                            # 解析系统遥测
+                            cpu_temp = int(sys_lines[0]) / 1000.0 if len(sys_lines) > 0 and sys_lines[0].isdigit() else 0
+                            gpu_temp = int(sys_lines[1]) / 1000.0 if len(sys_lines) > 1 and sys_lines[1].isdigit() else 0
+                            gpu_cur = int(sys_lines[2]) if len(sys_lines) > 2 and sys_lines[2].isdigit() else 0
+                            gpu_max = int(sys_lines[3]) if len(sys_lines) > 3 and sys_lines[3].isdigit() else 1
+                            npu_usage = round(gpu_cur / gpu_max * 100, 1) if gpu_max > 0 else 0
 
-                                self.edgeHealthReceived.emit({
-                                    "device_id": did,
+                            mem_parts = sys_lines[4].split() if len(sys_lines) > 4 else []
+                            mem_total = int(mem_parts[0]) if len(mem_parts) > 0 else 0
+                            mem_used = int(mem_parts[1]) if len(mem_parts) > 1 else 0
+                            mem_avail = int(mem_parts[3]) if len(mem_parts) > 3 else 0
+
+                            disk_parts = sys_lines[5].split() if len(sys_lines) > 5 else []
+                            disk_total = disk_parts[0] if len(disk_parts) > 0 else "-"
+                            disk_used = disk_parts[1] if len(disk_parts) > 1 else "-"
+                            disk_free = disk_parts[2] if len(disk_parts) > 2 else "-"
+                            disk_pct = disk_parts[3] if len(disk_parts) > 3 else "-"
+
+                            load_parts = sys_lines[6].split() if len(sys_lines) > 6 else []
+                            load1 = load_parts[0] if len(load_parts) > 0 else "0"
+                            load5 = load_parts[1] if len(load_parts) > 1 else "0"
+                            load15 = load_parts[2] if len(load_parts) > 2 else "0"
+
+                            uptime_sec = int(sys_lines[7]) if len(sys_lines) > 7 and sys_lines[7].isdigit() else 0
+
+                            proc_parts = sys_lines[8].split() if len(sys_lines) > 8 else []
+                            proc_cpu = float(proc_parts[0]) if len(proc_parts) > 0 else 0
+                            proc_mem = float(proc_parts[1]) if len(proc_parts) > 1 else 0
+
+                            # 解析硬件信息
+                            cpu_cores = int(hw_lines[0]) if len(hw_lines) > 0 and hw_lines[0].isdigit() else 0
+                            kernel = hw_lines[1] if len(hw_lines) > 1 else "-"
+                            os_name = hw_lines[2] if len(hw_lines) > 2 else "-"
+                            cpu_part = hw_lines[3] if len(hw_lines) > 3 else "-"
+                            video_devs = int(hw_lines[4]) if len(hw_lines) > 4 and hw_lines[4].isdigit() else 0
+                            serial_ports = hw_lines[5] if len(hw_lines) > 5 else "-"
+                            i2c_buses = hw_lines[6] if len(hw_lines) > 6 else "-"
+                            usb_count = int(hw_lines[7]) if len(hw_lines) > 7 and hw_lines[7].isdigit() else 0
+
+                            fps = self._fps_estimate.get(did, 0.0)
+
+                            # 发射遥测信号
+                            self.edgeHealthReceived.emit({
+                                "device_id": did,
+                                "status": "online",
+                                "fps": fps,
+                                "npu_usage": npu_usage,
+                                "cpu_temp": cpu_temp,
+                                "gpu_temp": gpu_temp,
+                                "mem_total_mb": mem_total,
+                                "mem_used_mb": mem_used,
+                                "mem_avail_mb": mem_avail,
+                                "disk_total": disk_total,
+                                "disk_used": disk_used,
+                                "disk_free": disk_free,
+                                "disk_pct": disk_pct,
+                                "load1": load1,
+                                "load5": load5,
+                                "load15": load15,
+                                "uptime_sec": uptime_sec,
+                                "proc_cpu_pct": proc_cpu,
+                                "proc_mem_pct": proc_mem,
+                                "cpu_cores": cpu_cores,
+                                "kernel": kernel,
+                                "os_name": os_name,
+                                "cpu_part": cpu_part,
+                                "video_devs": video_devs,
+                                "serial_ports": serial_ports,
+                                "i2c_buses": i2c_buses,
+                                "usb_count": usb_count,
+                            })
+
+                            # 更新数据库
+                            try:
+                                self._bridge.facade.edge_service.on_heartbeat(did, {
                                     "status": "online",
                                     "fps": fps,
                                     "npu_usage": npu_usage,
                                     "cpu_temp": cpu_temp,
                                 })
-
-                                # 更新数据库
-                                try:
-                                    self._bridge.facade.edge_service.on_heartbeat(did, {
-                                        "status": "online",
-                                        "fps": fps,
-                                        "npu_usage": npu_usage,
-                                        "cpu_temp": cpu_temp,
-                                    })
-                                except Exception:
-                                    pass
+                            except Exception:
+                                pass
                         except (subprocess.TimeoutExpired, Exception):
                             pass
                 except Exception:

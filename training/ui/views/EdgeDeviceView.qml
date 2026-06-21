@@ -140,7 +140,7 @@ Rectangle {
             detectionCounter++
         }
 
-        // 心跳实时更新 (含遥测: CPU温度、NPU、FPS、帧数等)
+        // 心跳实时更新 (含遥测: CPU温度、GPU温度、NPU、FPS、内存等)
         function onEdgeHealthReceived(data) {
             var did = data.device_id
             liveData.liveStatus = data.status
@@ -149,6 +149,28 @@ Rectangle {
             if (data.fps !== undefined) liveData.liveFps = data.fps
             if (data.npu_usage !== undefined) detailPanel.deviceNpu = data.npu_usage
             if (data.cpu_temp !== undefined) detailPanel.deviceCpuTemp = data.cpu_temp
+            if (data.gpu_temp !== undefined) detailPanel.deviceGpuTemp = data.gpu_temp
+            if (data.mem_total_mb !== undefined) detailPanel.memTotalMb = data.mem_total_mb
+            if (data.mem_used_mb !== undefined) detailPanel.memUsedMb = data.mem_used_mb
+            if (data.mem_avail_mb !== undefined) detailPanel.memAvailMb = data.mem_avail_mb
+            if (data.disk_total !== undefined) detailPanel.diskTotal = data.disk_total
+            if (data.disk_used !== undefined) detailPanel.diskUsed = data.disk_used
+            if (data.disk_free !== undefined) detailPanel.diskFree = data.disk_free
+            if (data.disk_pct !== undefined) detailPanel.diskPct = data.disk_pct
+            if (data.proc_cpu_pct !== undefined) detailPanel.procCpuPct = data.proc_cpu_pct
+            if (data.proc_mem_pct !== undefined) detailPanel.procMemPct = data.proc_mem_pct
+            if (data.load1 !== undefined) detailPanel.load1 = data.load1
+            if (data.load5 !== undefined) detailPanel.load5 = data.load5
+            if (data.load15 !== undefined) detailPanel.load15 = data.load15
+            if (data.uptime_sec !== undefined) detailPanel.uptimeSec = data.uptime_sec
+            if (data.cpu_cores !== undefined) detailPanel.cpuCores = data.cpu_cores
+            if (data.kernel !== undefined) detailPanel.kernel = data.kernel
+            if (data.os_name !== undefined) detailPanel.osName = data.os_name
+            if (data.cpu_part !== undefined) detailPanel.cpuPart = data.cpu_part
+            if (data.video_devs !== undefined) detailPanel.videoDevs = data.video_devs
+            if (data.serial_ports !== undefined) detailPanel.serialPorts = data.serial_ports
+            if (data.i2c_buses !== undefined) detailPanel.i2cBuses = data.i2c_buses
+            if (data.usb_count !== undefined) detailPanel.usbCount = data.usb_count
 
             // 更新设备列表中的状态
             for (var i = 0; i < deviceModel.count; i++) {
@@ -165,8 +187,6 @@ Rectangle {
             if (did === liveData.selectedDeviceId) {
                 detailPanel.deviceStatus = data.status
                 if (data.fps !== undefined) detailPanel.deviceFps = data.fps
-                if (data.npu_usage !== undefined) detailPanel.deviceNpu = data.npu_usage
-                if (data.cpu_temp !== undefined) detailPanel.deviceCpuTemp = data.cpu_temp
                 heartbeatCounter++
             }
         }
@@ -401,7 +421,7 @@ Rectangle {
         // ── 右侧: 实时数据 + 设备详情 + 模型版本 ────────
         Rectangle {
             Layout.fillHeight: true
-            Layout.preferredWidth: 380
+            Layout.preferredWidth: 420
             color: root.panelBg
             border.color: root.borderColor
             border.width: 1
@@ -535,101 +555,237 @@ Rectangle {
                     property real deviceFps: 0
                     property real deviceNpu: 0
                     property real deviceCpuTemp: 0
+                    property real deviceGpuTemp: 0
+                    property int memTotalMb: 0
+                    property int memUsedMb: 0
+                    property int memAvailMb: 0
+                    property string diskTotal: "-"
+                    property string diskUsed: "-"
+                    property string diskFree: "-"
+                    property string diskPct: "-"
+                    property real procCpuPct: 0
+                    property real procMemPct: 0
+                    property string load1: "0"
+                    property string load5: "0"
+                    property string load15: "0"
+                    property int uptimeSec: 0
+                    property int cpuCores: 0
+                    property string kernel: "-"
+                    property string osName: "-"
+                    property string cpuPart: "-"
+                    property int videoDevs: 0
+                    property string serialPorts: "-"
+                    property string i2cBuses: "-"
+                    property int usbCount: 0
                 }
 
-                GridLayout {
-                    Layout.fillWidth: true
-                    columns: 2
-                    columnSpacing: 8
-                    rowSpacing: 4
-
-                    Text { text: "设备ID:"; color: root.textMuted; font.pixelSize: 13 }
-                    Text { text: detailPanel.deviceId; color: root.textColor; font.pixelSize: 13; Layout.fillWidth: true; elide: Text.ElideRight }
-
-                    Text { text: "名称:"; color: root.textMuted; font.pixelSize: 13 }
-                    Text { text: detailPanel.deviceName; color: root.textColor; font.pixelSize: 13 }
-
-                    Text { text: "IP:"; color: root.textMuted; font.pixelSize: 13 }
-                    Text { text: detailPanel.deviceHost; color: root.textColor; font.pixelSize: 13 }
-
-                    Text { text: "状态:"; color: root.textMuted; font.pixelSize: 13 }
-                    Text { text: detailPanel.deviceStatus; color: detailPanel.deviceStatus === "online" ? root.successColor : "#9E9E9E"; font.pixelSize: 13 }
-
-                    Text { text: "场景:"; color: root.textMuted; font.pixelSize: 13 }
-                    Text { text: detailPanel.deviceScene; color: root.textColor; font.pixelSize: 13 }
-
-                    Text { text: "模型版本:"; color: root.textMuted; font.pixelSize: 13 }
-                    Text { text: detailPanel.deviceModel; color: root.textColor; font.pixelSize: 13 }
-
-                    Text { text: "FPS:"; color: root.textMuted; font.pixelSize: 13 }
-                    Text { text: Math.round(detailPanel.deviceFps); color: root.textColor; font.pixelSize: 13 }
-
-                    Text { text: "NPU:"; color: root.textMuted; font.pixelSize: 13 }
-                    Text { text: Math.round(detailPanel.deviceNpu) + "%"; color: root.textColor; font.pixelSize: 13 }
-
-                    Text { text: "CPU温度:"; color: root.textMuted; font.pixelSize: 13 }
-                    Text { text: Math.round(detailPanel.deviceCpuTemp) + "°C"; color: root.textColor; font.pixelSize: 13 }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    height: 1
-                    color: root.borderColor
-                }
-
-                // ══ 模型版本 ════════════════════════════════
-                Text {
-                    text: "模型版本"
-                    font.pixelSize: 16
-                    font.bold: true
-                    color: root.textColor
-                }
-
-                ListView {
+                ScrollView {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    model: modelVersionModel
                     clip: true
-                    spacing: 4
+                    contentWidth: availableWidth
 
-                    delegate: Rectangle {
+                    ColumnLayout {
                         width: parent.width
-                        height: 36
-                        color: root.bgDark
-                        radius: 4
+                        spacing: 8
+                        visible: liveData.selectedDeviceId !== ""
 
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.margins: 8
-                            spacing: 8
+                        // ══ 1. 实时检测 ═════════════════════════
+                        Rectangle {
+                            Layout.fillWidth: true; Layout.preferredHeight: 110
+                            color: root.bgDark; border.color: root.borderColor; border.width: 1; radius: 6
+                            ColumnLayout {
+                                anchors.fill: parent; anchors.margins: 12; spacing: 6
+                                Text { text: "实时检测"; font.pixelSize: 14; font.bold: true; color: root.primaryColor }
+                                RowLayout {
+                                    Layout.fillWidth: true; spacing: 12
+                                    ColumnLayout { spacing: 2
+                                        Text { text: "帧号"; font.pixelSize: 11; color: root.textMuted }
+                                        Text { text: liveData.liveFrameIndex; font.pixelSize: 20; font.bold: true; color: root.primaryColor }
+                                    }
+                                    ColumnLayout { spacing: 2
+                                        Text { text: "检测目标"; font.pixelSize: 11; color: root.textMuted }
+                                        Text { text: liveData.liveDetectionCount; font.pixelSize: 20; font.bold: true; color: liveData.liveDetectionCount > 0 ? root.dangerColor : root.textMuted }
+                                    }
+                                    ColumnLayout { spacing: 2
+                                        Text { text: "FPS"; font.pixelSize: 11; color: root.textMuted }
+                                        Text { text: Math.round(detailPanel.deviceFps); font.pixelSize: 20; font.bold: true; color: root.successColor }
+                                    }
+                                    ColumnLayout { spacing: 2
+                                        Text { text: "状态"; font.pixelSize: 11; color: root.textMuted }
+                                        Text { text: liveData.liveStatus; font.pixelSize: 20; font.bold: true; color: liveData.liveStatus === "online" ? root.successColor : "#9E9E9E" }
+                                    }
+                                }
+                            }
+                        }
 
-                            Text {
-                                text: model.name
-                                font.pixelSize: 13
-                                font.bold: true
-                                color: root.textColor
+                        // ══ 2. 系统资源 (带进度条) ════════════════
+                        Rectangle {
+                            Layout.fillWidth: true; Layout.preferredHeight: 195
+                            color: root.bgDark; border.color: root.borderColor; border.width: 1; radius: 6
+                            ColumnLayout {
+                                anchors.fill: parent; anchors.margins: 12; spacing: 5
+                                Text { text: "系统资源"; font.pixelSize: 14; font.bold: true; color: root.primaryColor }
+                                RowLayout { spacing: 6
+                                    Text { text: "CPU温度"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 55 }
+                                    Rectangle { Layout.fillWidth: true; height: 14; radius: 3; color: Qt.rgba(0,0,0,0.2)
+                                        Rectangle { height: 14; radius: 3; width: Math.min(parent.width, parent.width * detailPanel.deviceCpuTemp / 100)
+                                            color: detailPanel.deviceCpuTemp > 70 ? root.dangerColor : (detailPanel.deviceCpuTemp > 50 ? "#FF9800" : root.successColor) } }
+                                    Text { text: Math.round(detailPanel.deviceCpuTemp) + "°C"; color: root.textColor; font.pixelSize: 12; Layout.preferredWidth: 38 }
+                                }
+                                RowLayout { spacing: 6
+                                    Text { text: "GPU温度"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 55 }
+                                    Rectangle { Layout.fillWidth: true; height: 14; radius: 3; color: Qt.rgba(0,0,0,0.2)
+                                        Rectangle { height: 14; radius: 3; width: Math.min(parent.width, parent.width * detailPanel.deviceGpuTemp / 100)
+                                            color: detailPanel.deviceGpuTemp > 70 ? root.dangerColor : (detailPanel.deviceGpuTemp > 50 ? "#FF9800" : root.successColor) } }
+                                    Text { text: Math.round(detailPanel.deviceGpuTemp) + "°C"; color: root.textColor; font.pixelSize: 12; Layout.preferredWidth: 38 }
+                                }
+                                RowLayout { spacing: 6
+                                    Text { text: "NPU使用"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 55 }
+                                    Rectangle { Layout.fillWidth: true; height: 14; radius: 3; color: Qt.rgba(0,0,0,0.2)
+                                        Rectangle { height: 14; radius: 3; width: Math.min(parent.width, parent.width * detailPanel.deviceNpu / 100)
+                                            color: detailPanel.deviceNpu > 80 ? root.dangerColor : root.primaryColor } }
+                                    Text { text: Math.round(detailPanel.deviceNpu) + "%"; color: root.textColor; font.pixelSize: 12; Layout.preferredWidth: 38 }
+                                }
+                                RowLayout { spacing: 6
+                                    Text { text: "推理CPU"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 55 }
+                                    Rectangle { Layout.fillWidth: true; height: 14; radius: 3; color: Qt.rgba(0,0,0,0.2)
+                                        Rectangle { height: 14; radius: 3; width: Math.min(parent.width, parent.width * detailPanel.procCpuPct / 200)
+                                            color: root.secondaryColor } }
+                                    Text { text: Math.round(detailPanel.procCpuPct) + "%"; color: root.textColor; font.pixelSize: 12; Layout.preferredWidth: 38 }
+                                }
+                                RowLayout { spacing: 6
+                                    Text { text: "推理内存"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 55 }
+                                    Rectangle { Layout.fillWidth: true; height: 14; radius: 3; color: Qt.rgba(0,0,0,0.2)
+                                        Rectangle { height: 14; radius: 3; width: Math.min(parent.width, parent.width * detailPanel.procMemPct / 100)
+                                            color: root.secondaryColor } }
+                                    Text { text: Math.round(detailPanel.procMemPct * 10) / 10 + "%"; color: root.textColor; font.pixelSize: 12; Layout.preferredWidth: 38 }
+                                }
                             }
-                            Text {
-                                text: "v" + model.version
-                                font.pixelSize: 12
-                                color: root.primaryColor
+                        }
+
+                        // ══ 3. 内存/磁盘/负载 ═════════════════════
+                        Rectangle {
+                            Layout.fillWidth: true; Layout.preferredHeight: 115
+                            color: root.bgDark; border.color: root.borderColor; border.width: 1; radius: 6
+                            ColumnLayout {
+                                anchors.fill: parent; anchors.margins: 12; spacing: 3
+                                Text { text: "内存 & 磁盘 & 负载"; font.pixelSize: 14; font.bold: true; color: root.primaryColor }
+                                RowLayout { spacing: 4
+                                    Text { text: "内存:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 45 }
+                                    Text { text: detailPanel.memUsedMb + " / " + detailPanel.memTotalMb + " MB"; color: root.textColor; font.pixelSize: 12 }
+                                    Text { text: "(可用 " + detailPanel.memAvailMb + " MB)"; color: root.successColor; font.pixelSize: 11 }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "磁盘:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 45 }
+                                    Text { text: detailPanel.diskUsed + " / " + detailPanel.diskTotal + " (剩余 " + detailPanel.diskFree + ")"; color: root.textColor; font.pixelSize: 12 }
+                                    Text { text: detailPanel.diskPct; color: detailPanel.diskPct > "80%" ? root.dangerColor : root.textMuted; font.pixelSize: 11 }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "负载:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 45 }
+                                    Text { text: "1min " + detailPanel.load1 + "  5min " + detailPanel.load5 + "  15min " + detailPanel.load15; color: root.textColor; font.pixelSize: 12 }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "运行:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 45 }
+                                    Text { text: detailPanel.uptimeSec > 0 ? formatUptime(detailPanel.uptimeSec) : "-"; color: root.textColor; font.pixelSize: 12 }
+                                }
                             }
-                            Text {
-                                text: model.scene
-                                font.pixelSize: 12
-                                color: root.textMuted
+                        }
+
+                        // ══ 4. 硬件信息 ══════════════════════════
+                        Rectangle {
+                            Layout.fillWidth: true; Layout.preferredHeight: 175
+                            color: root.bgDark; border.color: root.borderColor; border.width: 1; radius: 6
+                            ColumnLayout {
+                                anchors.fill: parent; anchors.margins: 12; spacing: 3
+                                Text { text: "硬件信息"; font.pixelSize: 14; font.bold: true; color: root.primaryColor }
+                                RowLayout { spacing: 4
+                                    Text { text: "系统:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 45 }
+                                    Text { text: detailPanel.osName; color: root.textColor; font.pixelSize: 12; elide: Text.ElideRight }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "内核:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 45 }
+                                    Text { text: detailPanel.kernel; color: root.textColor; font.pixelSize: 12 }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "CPU:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 45 }
+                                    Text { text: detailPanel.cpuCores + " 核 (ARM part " + detailPanel.cpuPart + ")"; color: root.textColor; font.pixelSize: 12 }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "摄像头:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 45 }
+                                    Text { text: detailPanel.videoDevs + " 个 (/dev/video*)"; color: root.textColor; font.pixelSize: 12 }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "串口:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 45 }
+                                    Text { text: detailPanel.serialPorts !== "-" && detailPanel.serialPorts !== "" ? detailPanel.serialPorts : "无"; color: root.textColor; font.pixelSize: 12; elide: Text.ElideRight }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "I2C:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 45 }
+                                    Text { text: detailPanel.i2cBuses !== "-" && detailPanel.i2cBuses !== "" ? detailPanel.i2cBuses : "无"; color: root.textColor; font.pixelSize: 12; elide: Text.ElideRight }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "USB:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 45 }
+                                    Text { text: detailPanel.usbCount + " 个设备"; color: root.textColor; font.pixelSize: 12 }
+                                }
                             }
-                            Item { Layout.fillWidth: true }
-                            Text {
-                                text: model.quantization
-                                font.pixelSize: 11
-                                color: root.textMuted
+                        }
+
+                        // ══ 5. 设备信息 ══════════════════════════
+                        Rectangle {
+                            Layout.fillWidth: true; Layout.preferredHeight: 140
+                            color: root.bgDark; border.color: root.borderColor; border.width: 1; radius: 6
+                            ColumnLayout {
+                                anchors.fill: parent; anchors.margins: 12; spacing: 3
+                                Text { text: "设备信息"; font.pixelSize: 14; font.bold: true; color: root.primaryColor }
+                                RowLayout { spacing: 4
+                                    Text { text: "设备ID:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 55 }
+                                    Text { text: detailPanel.deviceId; color: root.textColor; font.pixelSize: 12; elide: Text.ElideRight }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "名称:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 55 }
+                                    Text { text: detailPanel.deviceName; color: root.textColor; font.pixelSize: 12 }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "IP:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 55 }
+                                    Text { text: detailPanel.deviceHost; color: root.textColor; font.pixelSize: 12 }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "状态:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 55 }
+                                    Text { text: detailPanel.deviceStatus; color: detailPanel.deviceStatus === "online" ? root.successColor : "#9E9E9E"; font.pixelSize: 12; font.bold: true }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "场景:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 55 }
+                                    Text { text: detailPanel.deviceScene; color: root.textColor; font.pixelSize: 12 }
+                                }
+                                RowLayout { spacing: 4
+                                    Text { text: "模型:"; color: root.textMuted; font.pixelSize: 12; Layout.preferredWidth: 55 }
+                                    Text { text: detailPanel.deviceModel; color: root.textColor; font.pixelSize: 12; elide: Text.ElideRight }
+                                }
                             }
                         }
                     }
                 }
+
+                // 未选中设备时的提示
+                Text {
+                    anchors.centerIn: parent
+                    visible: liveData.selectedDeviceId === ""
+                    text: "点击左侧设备查看实时数据"
+                    font.pixelSize: 13
+                    color: root.textMuted
+                }
             }
         }
+    }
+
+    // ── 工具函数 ──────────────────────────────────────────
+    function formatUptime(sec) {
+        var d = Math.floor(sec / 86400)
+        var h = Math.floor((sec % 86400) / 3600)
+        var m = Math.floor((sec % 3600) / 60)
+        if (d > 0) return d + "天" + h + "小时"
+        if (h > 0) return h + "小时" + m + "分"
+        return m + "分钟"
     }
 
     // ── 注册设备对话框 ───────────────────────────────────
