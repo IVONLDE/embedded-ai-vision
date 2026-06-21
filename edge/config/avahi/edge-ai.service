@@ -1,0 +1,12 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">Edge AI Camera on %h</name>
+  <service>
+    <type>_edge-ai._tcp</type>
+    <port>50051</port>
+    <txt-record>device_id=rk3399pro-edge-001</txt-record>
+    <txt-record>scene=vehicle</txt-record>
+    <txt-record>mqtt_port=1883</txt-record>
+  </service>
+</service-group>

@@ -43,9 +43,18 @@ pkg_check_modules(LIBSYSTEMD libsystemd)
 # OpenSSL (SHA256 校验, OTA)
 find_package(OpenSSL QUIET)
 
-# gRPC + Protobuf
+# gRPC + Protobuf: 优先 find_package, 降级到 pkg-config
 find_package(Protobuf QUIET)
-find_package(gRPC QUIET)
+find_package(gRPC QUIET CONFIG)
+if(NOT gRPC_FOUND)
+    pkg_check_modules(GRPCPP QUIET grpc++)
+    pkg_check_modules(PROTOBUF_PC QUIET protobuf)
+    if(GRPCPP_FOUND AND PROTOBUF_PC_FOUND)
+        set(gRPC_FOUND TRUE)
+        set(PROTOBUF_FOUND TRUE)
+        message(STATUS "gRPC found via pkg-config")
+    endif()
+endif()
 
 # pthread (线程 + CPU 亲和性)
 find_package(Threads REQUIRED)
@@ -65,6 +74,75 @@ else()
     message(WARNING "  Build will proceed but rknn1_engine will not compile.")
 endif()
 
+# ── Proto 文件编译 (gRPC stub 生成) ─────────────────────────
+set(PROTO_DIR "${CMAKE_SOURCE_DIR}/proto")
+set(PROTO_OUT_DIR "${CMAKE_SOURCE_DIR}/src/comm/generated")
+
+if(PROTOBUF_FOUND AND gRPC_FOUND)
+    message(STATUS "gRPC and Protobuf found, enabling proto compilation")
+
+    # 确保输出目录存在
+    file(MAKE_DIRECTORY ${PROTO_OUT_DIR})
+
+    # Proto 源文件
+    set(PROTO_FILES
+        "${PROTO_DIR}/edge_service.proto"
+        "${PROTO_DIR}/detection.proto"
+    )
+
+    # 生成的 C++ 文件
+    set(PROTO_SRCS)
+    set(PROTO_HDRS)
+    set(GRPC_SRCS)
+    set(GRPC_HDRS)
+
+    foreach(PROTO_FILE ${PROTO_FILES})
+        get_filename_component(PROTO_NAME ${PROTO_FILE} NAME_WE)
+
+        list(APPEND PROTO_SRCS "${PROTO_OUT_DIR}/${PROTO_NAME}.pb.cc")
+        list(APPEND PROTO_HDRS "${PROTO_OUT_DIR}/${PROTO_NAME}.pb.h")
+        list(APPEND GRPC_SRCS "${PROTO_OUT_DIR}/${PROTO_NAME}.grpc.pb.cc")
+        list(APPEND GRPC_HDRS "${PROTO_OUT_DIR}/${PROTO_NAME}.grpc.pb.h")
+    endforeach()
+
+    # 确定 protoc 和 grpc_cpp_plugin 路径
+    if(Protobuf_PROTOC_EXECUTABLE)
+        set(PROTOC_EXE ${Protobuf_PROTOC_EXECUTABLE})
+    else()
+        set(PROTOC_EXE "/usr/bin/protoc")
+    endif()
+
+    # grpc_cpp_plugin 路径
+    find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin PATHS /usr/bin)
+    if(NOT GRPC_CPP_PLUGIN)
+        message(FATAL_ERROR "grpc_cpp_plugin not found")
+    endif()
+
+    # 自定义命令: 生成 protobuf + gRPC stub
+    add_custom_command(
+        OUTPUT ${PROTO_SRCS} ${PROTO_HDRS} ${GRPC_SRCS} ${GRPC_HDRS}
+        COMMAND ${PROTOC_EXE}
+            --proto_path=${PROTO_DIR}
+            --cpp_out=${PROTO_OUT_DIR}
+            --grpc_out=${PROTO_OUT_DIR}
+            --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
+            ${PROTO_FILES}
+        DEPENDS ${PROTO_FILES}
+        COMMENT "Generating C++ protobuf/gRPC stubs from proto files"
+        VERBATIM
+    )
+
+    # 生成的源文件库
+    add_library(edge-ai-proto STATIC ${PROTO_SRCS} ${GRPC_SRCS})
+    target_include_directories(edge-ai-proto PUBLIC ${PROTO_OUT_DIR} ${PROTOBUF_PC_INCLUDE_DIRS})
+    target_link_libraries(edge-ai-proto PUBLIC ${PROTOBUF_PC_LIBRARIES} ${GRPCPP_LIBRARIES} grpc++)
+
+    set(PROTO_GENERATED TRUE)
+else()
+    message(STATUS "gRPC or Protobuf not found, proto compilation disabled")
+    set(PROTO_GENERATED FALSE)
+endif()
+
 # ── 头文件路径 ────────────────────────────────────────────
 include_directories(
     ${CMAKE_SOURCE_DIR}/../src
@@ -75,6 +153,7 @@ include_directories(
     ${MOSQUITTO_INCLUDE_DIRS}
     ${YAMLCPP_INCLUDE_DIRS}
     ${LIBSYSTEMD_INCLUDE_DIRS}
+    ${PROTO_OUT_DIR}
 )
 
 # ── 库搜索路径 ────────────────────────────────────────────
@@ -137,16 +216,15 @@ target_link_libraries(edge-ai-camera
     OpenSSL::Crypto
 )
 
-# 可选: gRPC (仅在有 protobuf 时链接)
-if(Protobuf_FOUND AND gRPC_FOUND)
-    target_link_libraries(edge-ai-camera
-    PRIVATE mosquitto yaml-cpp PRIVATE ${Protobuf_LIBRARIES} gRPC::grpc++)
+# 可选: gRPC + Proto (编译定义 + 链接生成的 stub)
+if(PROTO_GENERATED)
+    target_compile_definitions(edge-ai-camera PRIVATE PROTO_GENERATED)
+    target_link_libraries(edge-ai-camera PRIVATE edge-ai-proto)
 endif()
 
 # 可选: RKNN (头文件存在时尝试链接)
 if(EXISTS "${RKNN_INCLUDE_DIR}/rknn_api.h")
-    target_link_libraries(edge-ai-camera
-    PRIVATE mosquitto yaml-cpp PRIVATE rknn_api)
+    target_link_libraries(edge-ai-camera PRIVATE rknn_api)
 endif()
 
 # ── 编译选项 ──────────────────────────────────────────────
@@ -184,9 +262,10 @@ message(STATUS "  C++ Standard:  ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Build Type:    ${CMAKE_BUILD_TYPE}")
 message(STATUS "  RKNN API:      ${RKNN_INCLUDE_DIR}")
 message(STATUS "  OpenCV:        ${OpenCV_FOUND}")
-message(STATUS "  Eigen3:        ${EIGEN3_FOUND}")
+message(STATUS "  Eigen3:        ${Eigen3_FOUND}")
 message(STATUS "  Mosquitto:     ${MOSQUITTO_FOUND}")
 message(STATUS "  yaml-cpp:      ${YAMLCPP_FOUND}")
 message(STATUS "  systemd:       ${LIBSYSTEMD_FOUND}")
 message(STATUS "  gRPC:          ${gRPC_FOUND}")
+message(STATUS "  Proto stubs:   ${PROTO_GENERATED}")
 message(STATUS "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

@@ -21,8 +21,14 @@
 #include <string>
 #include <functional>
 #include <atomic>
+#include <memory>
 #include "../inference/rknn1_engine.h"
 #include "../pipeline/pipeline_config.h"
+
+/* 条件编译: gRPC 仅在找到 protobuf/gRPC 时启用 */
+#ifdef PROTO_GENERATED
+#include "generated/edge_service.grpc.pb.h"
+#endif
 
 /* 前向声明 */
 class OtaManager;
@@ -62,6 +68,56 @@ private:
 
     /* OTA 指令回调 */
     OtaCallback _ota_callback;
+
+#ifdef PROTO_GENERATED
+    /* gRPC 服务器实例 */
+    std::unique_ptr<grpc::Server> _server;
+
+    /* ── gRPC Service 实现 ──────────────────────────────── */
+    class EdgeServiceImpl final : public edge_ai::EdgeService::Service {
+    public:
+        EdgeServiceImpl(GrpcServer *owner) : _owner(owner) {}
+
+        /* 8 个 RPC handler */
+        grpc::Status PushModel(grpc::ServerContext *context,
+                               const edge_ai::ModelRequest *request,
+                               edge_ai::ModelResponse *response) override;
+
+        grpc::Status SwitchScene(grpc::ServerContext *context,
+                                 const edge_ai::SceneRequest *request,
+                                 edge_ai::SceneResponse *response) override;
+
+        grpc::Status GetStatus(grpc::ServerContext *context,
+                               const edge_ai::StatusRequest *request,
+                               edge_ai::StatusResponse *response) override;
+
+        grpc::Status UpdateConfig(grpc::ServerContext *context,
+                                  const edge_ai::ConfigRequest *request,
+                                  edge_ai::ConfigResponse *response) override;
+
+        grpc::Status Restart(grpc::ServerContext *context,
+                             const edge_ai::RestartRequest *request,
+                             edge_ai::RestartResponse *response) override;
+
+        grpc::Status GetVersionInfo(grpc::ServerContext *context,
+                                    const edge_ai::VersionInfoRequest *request,
+                                    edge_ai::VersionInfoResponse *response) override;
+
+        grpc::Status PushAppUpdate(grpc::ServerContext *context,
+                                   const edge_ai::AppUpdateRequest *request,
+                                   edge_ai::AppUpdateResponse *response) override;
+
+        grpc::Status Rollback(grpc::ServerContext *context,
+                              const edge_ai::RollbackRequest *request,
+                              edge_ai::RollbackResponse *response) override;
+
+    private:
+        GrpcServer *_owner;
+    };
+
+    /* Service 实例 */
+    std::unique_ptr<EdgeServiceImpl> _service_impl;
+#endif
 
     /* ── 内部 OTA 业务逻辑 ──────────────────────────────── */
 
