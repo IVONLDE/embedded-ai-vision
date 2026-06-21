@@ -26,4 +26,19 @@ config EDGE_AI_GPIO_TRIGGER
       To compile this driver as a module, choose M here:
       the module will be called gpio_trigger.
 
+config EDGE_AI_SPI_SENSOR
+    tristate "Edge AI SPI Sensor Driver"
+    depends on SPI
+    help
+      SPI sensor character device driver for RK3399Pro Edge AI Camera.
+      Provides /dev/spi_sensor for userspace SPI access with
+      read/write/ioctl/poll interface and sysfs statistics
+      under /sys/class/edge-sensor/.
+
+      Supports full-duplex transfer, configurable speed/mode/bits,
+      and transfer statistics.
+
+      To compile this driver as a module, choose M here:
+      the module will be called spi_sensor.
+
 endmenu

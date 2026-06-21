@@ -21,6 +21,8 @@
 #include "../inference/deepsort/tracker.h"
 #include "../io/v4l2_capture.h"
 #include "../io/file_input.h"
+#include "../io/video_encoder.h"
+#include "../io/rtsp_server.h"
 #include "../comm/mqtt_publisher.h"
 #include "../comm/detect_box.h"
 #include "../comm/grpc_server.h"
@@ -29,6 +31,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <csignal>
+#include <cstring>
 #include <iostream>
 #include <mutex>
 #include <queue>
@@ -40,6 +43,10 @@
 static std::atomic<bool> g_running{true};
 static std::atomic<bool> g_shutdown_requested{false};
 static GrpcServer *g_grpc_server = nullptr;  /* 用于 MQTT 命令转发 */
+
+/* 远程控制标志 (PC 端通过 MQTT 命令设置) */
+static std::atomic<bool> g_recording_requested{false};
+static std::atomic<bool> g_rtsp_requested{false};
 
 /* ── 线程间队列 ────────────────────────────────────────── */
 struct FrameData {
@@ -55,12 +62,24 @@ struct DetectResult {
     int frame_index;
     std::vector<DetectBox> boxes;  /* 检测框列表 */
     int64_t timestamp_us;
+
+    /* 原始帧数据 (从 FrameData 复制), 传递给跟踪线程 */
+    unsigned char *frame_data = nullptr;
+    int frame_width = 0;
+    int frame_height = 0;
 };
 
 struct TrackResult {
     int frame_index;
     std::vector<DetectBox> boxes;  /* 带 trackID 的检测框 */
     int64_t timestamp_us;
+
+    /* 原始帧数据 (RGB24, W×H×3), 用于视频编码和 RTSP 推流
+     * 由推理线程分配, 输出线程消费后释放
+     * nullptr 表示该帧无图像数据 (隔帧检测跳过的帧) */
+    unsigned char *frame_data = nullptr;
+    int frame_width = 0;
+    int frame_height = 0;
 };
 
 /* 线程间队列 (条件变量实现, 避免忙等自旋) */
@@ -256,6 +275,21 @@ static void inference_thread_func(const PipelineConfig &cfg,
             continue;
         }
 
+        /* 复制帧数据用于编码/推流 (必须在归还 V4L2 缓冲区之前)
+         * 仅在需要视频输出时复制, 避免不必要的内存开销
+         * RGB24: width × height × 3 字节 */
+        unsigned char *frame_copy = nullptr;
+        if (cfg.output.save_video || cfg.output.enable_rtsp) {
+            size_t frame_size = (size_t)frame.width * frame.height * 3;
+            frame_copy = new(std::nothrow) unsigned char[frame_size];
+            if (frame_copy) {
+                memcpy(frame_copy, frame.data, frame_size);
+            } else {
+                fprintf(stderr, "[Pipeline] Frame copy alloc failed (%zu bytes)\n",
+                        frame_size);
+            }
+        }
+
         /* 归还缓冲区 */
         if (frame.capture)
             frame.capture->release_frame();
@@ -271,6 +305,9 @@ static void inference_thread_func(const PipelineConfig &cfg,
         DetectResult result;
         result.frame_index = frame.index;
         result.timestamp_us = frame.timestamp_us;
+        result.frame_data = frame_copy;
+        result.frame_width = frame.width;
+        result.frame_height = frame.height;
 
         /* 调用 YOLOv5 后处理 (复用现有 decode.cpp 逻辑) */
         post_process_fp(engine_ptr->_output_buffs[0],
@@ -328,6 +365,11 @@ static void tracking_thread_func(const PipelineConfig &cfg,
         TrackResult result;
         result.frame_index = det.frame_index;
         result.timestamp_us = det.timestamp_us;
+        /* 传递帧数据 (所有权转移: DetectResult → TrackResult) */
+        result.frame_data = det.frame_data;
+        result.frame_width = det.frame_width;
+        result.frame_height = det.frame_height;
+        det.frame_data = nullptr;  /* 防止双重释放 */
 
         if (cfg.tracking.enabled && !det.boxes.empty()) {
             tracker.predict();
@@ -359,7 +401,7 @@ static void tracking_thread_func(const PipelineConfig &cfg,
 /*
  * output_thread_func — 结果输出线程
  *
- * 从 track_queue 取跟踪结果 → MQTT 上报 + 视频编码 + 显示
+ * 从 track_queue 取跟踪结果 → MQTT 上报 + 视频编码 + RTSP 推流
  *
  * 背压: 队列满时本地缓存 (断网不丢数据)
  */
@@ -380,16 +422,35 @@ static void output_thread_func(const PipelineConfig &cfg,
         mqtt.connect(cfg.mqtt.broker_host, cfg.mqtt.broker_port,
                      cfg.mqtt.client_id, cfg.mqtt.keepalive);
 
-        /* 设置 MQTT 命令回调 → 转发到 gRPC server 的 handle_command */
+        /* 设置 MQTT 命令回调 → 转发到 gRPC server 的 handle_command
+         * 同时处理视频录制/RTSP 远程控制命令 */
         mqtt.set_command_callback([](const char *topic,
                                       const char *payload, int len) {
-            /* 等待 gRPC server 就绪 */
-            if (!g_grpc_server) return;
-
             std::string msg(payload, len);
             std::string cmd;
 
-            /* 简化 JSON 解析: 提取命令类型 */
+            /* 视频录制/RTSP 远程控制 (直接设置全局原子标志) */
+            if (msg.find("\"start_recording\"") != std::string::npos) {
+                g_recording_requested.store(true);
+                printf("[Pipeline] MQTT: start_recording requested\n");
+                return;
+            } else if (msg.find("\"stop_recording\"") != std::string::npos) {
+                g_recording_requested.store(false);
+                printf("[Pipeline] MQTT: stop_recording requested\n");
+                return;
+            } else if (msg.find("\"start_rtsp\"") != std::string::npos) {
+                g_rtsp_requested.store(true);
+                printf("[Pipeline] MQTT: start_rtsp requested\n");
+                return;
+            } else if (msg.find("\"stop_rtsp\"") != std::string::npos) {
+                g_rtsp_requested.store(false);
+                printf("[Pipeline] MQTT: stop_rtsp requested\n");
+                return;
+            }
+
+            /* 其他命令转发到 gRPC server */
+            if (!g_grpc_server) return;
+
             if (msg.find("\"switch_scene\"") != std::string::npos)
                 cmd = "switch_scene";
             else if (msg.find("\"reload_model\"") != std::string::npos)
@@ -404,7 +465,81 @@ static void output_thread_func(const PipelineConfig &cfg,
         });
     }
 
+    /* 初始化视频编码器 (H.264/H.265 硬件编码)
+     * 支持两种启动方式:
+     *   1. 配置文件 save_video=true → 自动启动
+     *   2. PC 端 MQTT 命令 → 远程启动/停止
+     */
+    VideoEncoder video_encoder;
+    bool encoder_initialized = false;
+    if (cfg.output.save_video || true) {  /* 始终初始化, 支持远程启动 */
+        encoder_initialized = video_encoder.init(
+            cfg.input.v4l2_width, cfg.input.v4l2_height,
+            cfg.input.v4l2_fps,
+            cfg.output.video_codec,
+            cfg.output.video_bitrate_kbps,
+            cfg.output.video_gop);
+        if (!encoder_initialized) {
+            fprintf(stderr, "[Pipeline] Failed to init video encoder\n");
+        }
+    }
+
+    /* 初始化 RTSP 推流服务 */
+    RtspServer rtsp_server;
+    bool rtsp_initialized = false;
+    if (cfg.output.enable_rtsp || true) {  /* 始终初始化, 支持远程启动 */
+        rtsp_initialized = true;
+    }
+
+    /* 配置文件自动启动 */
+    if (cfg.output.save_video && encoder_initialized) {
+        video_encoder.start_recording(cfg.output.video_path);
+        printf("[Pipeline] Video recording started: %s (%s, %dkbps)\n",
+               cfg.output.video_path.c_str(),
+               cfg.output.video_codec.c_str(),
+               cfg.output.video_bitrate_kbps);
+    }
+    if (cfg.output.enable_rtsp && rtsp_initialized) {
+        if (rtsp_server.start(cfg.output.rtsp_port, cfg.output.rtsp_mount,
+                              cfg.input.v4l2_width, cfg.input.v4l2_height,
+                              cfg.input.v4l2_fps,
+                              cfg.output.rtsp_codec)) {
+            printf("[Pipeline] RTSP server started on port %d%s\n",
+                   cfg.output.rtsp_port, cfg.output.rtsp_mount.c_str());
+        } else {
+            fprintf(stderr, "[Pipeline] Failed to start RTSP server\n");
+        }
+    }
+
     while (g_running.load()) {
+        /* ── 远程控制: 录制启动/停止 ── */
+        if (encoder_initialized) {
+            bool want_rec = g_recording_requested.load();
+            if (want_rec && !video_encoder.is_recording()) {
+                video_encoder.start_recording(cfg.output.video_path);
+                printf("[Pipeline] Remote: recording started\n");
+            } else if (!want_rec && video_encoder.is_recording()) {
+                video_encoder.stop_recording();
+                printf("[Pipeline] Remote: recording stopped\n");
+            }
+        }
+
+        /* ── 远程控制: RTSP 启动/停止 ── */
+        if (rtsp_initialized) {
+            bool want_rtsp = g_rtsp_requested.load();
+            if (want_rtsp && !rtsp_server.is_running()) {
+                rtsp_server.start(cfg.output.rtsp_port, cfg.output.rtsp_mount,
+                                  cfg.input.v4l2_width, cfg.input.v4l2_height,
+                                  cfg.input.v4l2_fps,
+                                  cfg.output.rtsp_codec);
+                printf("[Pipeline] Remote: RTSP started on port %d\n",
+                       cfg.output.rtsp_port);
+            } else if (!want_rtsp && rtsp_server.is_running()) {
+                rtsp_server.stop();
+                printf("[Pipeline] Remote: RTSP stopped\n");
+            }
+        }
+
         TrackResult result;
         if (!track_queue.pop(result)) {
             usleep(1000);
@@ -424,6 +559,34 @@ static void output_thread_func(const PipelineConfig &cfg,
             mqtt.publish_health(cfg.mqtt.topic_health,
                                 result.frame_index);
         }
+
+        /* 视频编码: 将原始帧推入编码器 */
+        if (video_encoder.is_recording() && result.frame_data) {
+            video_encoder.push_frame(result.frame_data,
+                                     result.timestamp_us);
+        }
+
+        /* RTSP 推流: 将原始帧推入 RTSP 服务器 */
+        if (rtsp_server.is_running() && result.frame_data) {
+            rtsp_server.push_frame(result.frame_data,
+                                   result.timestamp_us);
+        }
+
+        /* 释放帧数据 (所有权由输出线程负责) */
+        if (result.frame_data) {
+            delete[] result.frame_data;
+            result.frame_data = nullptr;
+        }
+    }
+
+    /* 停止编码和推流 */
+    if (video_encoder.is_recording()) {
+        video_encoder.stop_recording();
+        printf("[Pipeline] Video recording stopped\n");
+    }
+    if (rtsp_server.is_running()) {
+        rtsp_server.stop();
+        printf("[Pipeline] RTSP server stopped\n");
     }
 
     if (cfg.mqtt.enabled)

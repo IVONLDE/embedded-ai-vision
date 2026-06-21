@@ -3,8 +3,13 @@ config BR2_PACKAGE_EDGE_AI_APP
     depends on BR2_aarch64
     depends on BR2_PACKAGE_OPENCV4
     depends on BR2_PACKAGE_MOSQUITTO
+    select BR2_PACKAGE_GSTREAMER1
+    select BR2_PACKAGE_GST1_PLUGINS_BASE
+    select BR2_PACKAGE_GST1_PLUGINS_BAD
+    select BR2_PACKAGE_GST1_RTSP_SERVER
     help
       Edge AI Camera inference application for RK3399Pro.
       Multi-threaded pipeline: V4L2 capture → NPU inference →
-      SORT tracking → MQTT publish.
+      SORT tracking → MQTT publish + Video encoding (H.264/H.265
+      via GStreamer + Rockchip MPP) + RTSP live streaming.
       Managed by systemd service edge-ai-camera.

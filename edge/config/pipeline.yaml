@@ -36,11 +36,20 @@ tracking:
 
 # ── 输出 ──────────────────────────────────────────────────
 output:
+  # 本地视频录制 (H.264/H.265 硬件编码)
   save_video: false
   video_path: "/data/results.mp4"
+  video_codec: "h264"           # "h264" 或 "h265"
+  video_bitrate_kbps: 4000      # 4Mbps
+  video_gop: 30                 # 每 30 帧一个关键帧
+
+  # RTSP 实时推流
   enable_rtsp: false
   rtsp_port: 8554
   rtsp_mount: "/edge_camera"
+  rtsp_codec: "h264"
+
+  # 本地显示 (开发调试)
   enable_display: false
 
 # ── MQTT ──────────────────────────────────────────────────

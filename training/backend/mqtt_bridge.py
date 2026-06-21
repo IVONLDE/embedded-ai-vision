@@ -146,6 +146,23 @@ class MqttBridge:
         self._broker_port = broker_port
         return self.start()
 
+    def publish(self, topic: str, payload: str, qos: int = 1) -> bool:
+        """发布 MQTT 消息 (用于远程命令下发)"""
+        if not self._client or not self._connected:
+            print(f"[MqttBridge] 发布失败: 未连接")
+            return False
+        try:
+            result = self._client.publish(topic, payload, qos=qos)
+            if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                print(f"[MqttBridge] 已发布: {topic} ← {payload[:80]}")
+                return True
+            else:
+                print(f"[MqttBridge] 发布失败: rc={result.rc}")
+                return False
+        except Exception as e:
+            print(f"[MqttBridge] 发布异常: {e}")
+            return False
+
     # ── 内部连接方法 ───────────────────────────────────────
 
     def _connect(self) -> bool:

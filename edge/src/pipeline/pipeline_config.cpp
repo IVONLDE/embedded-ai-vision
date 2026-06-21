@@ -97,12 +97,20 @@ PipelineConfig PipelineConfig::load_from_yaml(const std::string &yaml_path)
                 cfg.output.save_video = out["save_video"].as<bool>();
             if (out["video_path"])
                 cfg.output.video_path = out["video_path"].as<std::string>();
+            if (out["video_codec"])
+                cfg.output.video_codec = out["video_codec"].as<std::string>();
+            if (out["video_bitrate_kbps"])
+                cfg.output.video_bitrate_kbps = out["video_bitrate_kbps"].as<int>();
+            if (out["video_gop"])
+                cfg.output.video_gop = out["video_gop"].as<int>();
             if (out["enable_rtsp"])
                 cfg.output.enable_rtsp = out["enable_rtsp"].as<bool>();
             if (out["rtsp_port"])
                 cfg.output.rtsp_port = out["rtsp_port"].as<int>();
             if (out["rtsp_mount"])
                 cfg.output.rtsp_mount = out["rtsp_mount"].as<std::string>();
+            if (out["rtsp_codec"])
+                cfg.output.rtsp_codec = out["rtsp_codec"].as<std::string>();
             if (out["enable_display"])
                 cfg.output.enable_display = out["enable_display"].as<bool>();
         }

@@ -581,6 +581,60 @@ class BackendService(QObject):
         threading.Thread(target=worker, daemon=True).start()
         return {"status": "pending", "message": "重启中..."}
 
+    # ── 视频录制 & RTSP 控制 ────────────────────────────────
+
+    @Slot(str, result=dict)
+    def startDeviceRecording(self, deviceId: str) -> dict:
+        """远程启动设备视频录制 (通过 MQTT 命令)"""
+        try:
+            if hasattr(self, '_mqtt_bridge') and self._mqtt_bridge:
+                topic = f"edge/{deviceId}/command"
+                payload = '{"command": "start_recording"}'
+                self._mqtt_bridge.publish(topic, payload)
+                return {"status": "success", "message": "录制命令已发送"}
+            return {"status": "error", "message": "MQTT 未连接"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    @Slot(str, result=dict)
+    def stopDeviceRecording(self, deviceId: str) -> dict:
+        """远程停止设备视频录制 (通过 MQTT 命令)"""
+        try:
+            if hasattr(self, '_mqtt_bridge') and self._mqtt_bridge:
+                topic = f"edge/{deviceId}/command"
+                payload = '{"command": "stop_recording"}'
+                self._mqtt_bridge.publish(topic, payload)
+                return {"status": "success", "message": "停止录制命令已发送"}
+            return {"status": "error", "message": "MQTT 未连接"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    @Slot(str, result=dict)
+    def startDeviceRtsp(self, deviceId: str) -> dict:
+        """远程启动设备 RTSP 推流 (通过 MQTT 命令)"""
+        try:
+            if hasattr(self, '_mqtt_bridge') and self._mqtt_bridge:
+                topic = f"edge/{deviceId}/command"
+                payload = '{"command": "start_rtsp"}'
+                self._mqtt_bridge.publish(topic, payload)
+                return {"status": "success", "message": "RTSP 启动命令已发送"}
+            return {"status": "error", "message": "MQTT 未连接"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    @Slot(str, result=dict)
+    def stopDeviceRtsp(self, deviceId: str) -> dict:
+        """远程停止设备 RTSP 推流 (通过 MQTT 命令)"""
+        try:
+            if hasattr(self, '_mqtt_bridge') and self._mqtt_bridge:
+                topic = f"edge/{deviceId}/command"
+                payload = '{"command": "stop_rtsp"}'
+                self._mqtt_bridge.publish(topic, payload)
+                return {"status": "success", "message": "RTSP 停止命令已发送"}
+            return {"status": "error", "message": "MQTT 未连接"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     @Slot(str, str, str, str, str, str, str, result=dict)
     def registerModelVersion(self, name: str, version: str, modelType: str,
                               scene: str, filePath: str, quantization: str = "fp16",

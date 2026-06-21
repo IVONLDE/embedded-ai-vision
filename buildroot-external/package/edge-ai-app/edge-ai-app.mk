@@ -8,7 +8,9 @@ EDGE_AI_APP_SITE_METHOD = local
 EDGE_AI_APP_INSTALL_STAGING = NO
 EDGE_AI_APP_INSTALL_TARGET = YES
 
-EDGE_AI_APP_DEPENDENCIES = opencv4 mosquitto yaml-cpp eigen
+EDGE_AI_APP_DEPENDENCIES = opencv4 mosquitto yaml-cpp eigen \
+    gstreamer1 gst1-plugins-base gst1-plugins-good gst1-plugins-bad \
+    gst1-rtsp-server
 
 define EDGE_AI_APP_CONFIGURE_CMDS
     mkdir -p $(@D)/build

@@ -376,6 +376,35 @@ Rectangle {
                                     onClicked: { deployDialog.targetDeviceId = model.device_id; deployDialog.open() }
                                 }
                                 Button {
+                                    text: "录制"
+                                    font.pixelSize: 11
+                                    highlighted: true
+                                    onClicked: {
+                                        var result = backendService.startDeviceRecording(model.device_id)
+                                        otaStatusText.text = result.message || "录制命令已发送"
+                                        otaStatusText.color = result.status === "success" ? root.successColor : root.dangerColor
+                                    }
+                                }
+                                Button {
+                                    text: "停止录制"
+                                    font.pixelSize: 11
+                                    onClicked: {
+                                        var result = backendService.stopDeviceRecording(model.device_id)
+                                        otaStatusText.text = result.message || "停止录制命令已发送"
+                                        otaStatusText.color = result.status === "success" ? root.successColor : root.dangerColor
+                                    }
+                                }
+                                Button {
+                                    text: "RTSP"
+                                    font.pixelSize: 11
+                                    highlighted: true
+                                    onClicked: {
+                                        var result = backendService.startDeviceRtsp(model.device_id)
+                                        otaStatusText.text = result.message || "RTSP 启动命令已发送"
+                                        otaStatusText.color = result.status === "success" ? root.successColor : root.dangerColor
+                                    }
+                                }
+                                Button {
                                     text: "回滚"
                                     font.pixelSize: 11
                                     onClicked: {

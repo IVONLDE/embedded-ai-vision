@@ -37,6 +37,13 @@ endif()
 # libmosquitto (MQTT 客户端)
 pkg_check_modules(MOSQUITTO mosquitto)
 
+# GStreamer (视频编码 + RTSP 推流)
+pkg_check_modules(GST REQUIRED gstreamer-1.0)
+pkg_check_modules(GST_APP REQUIRED gstreamer-app-1.0)
+pkg_check_modules(GST_RTSP REQUIRED gstreamer-rtsp-1.0)
+pkg_check_modules(GST_RTSP_SERVER REQUIRED gstreamer-rtsp-server-1.0)
+pkg_check_modules(GST_VIDEO REQUIRED gstreamer-video-1.0)
+
 # systemd (systemd notify/watchdog)
 pkg_check_modules(LIBSYSTEMD libsystemd)
 
@@ -153,6 +160,11 @@ include_directories(
     ${MOSQUITTO_INCLUDE_DIRS}
     ${YAMLCPP_INCLUDE_DIRS}
     ${LIBSYSTEMD_INCLUDE_DIRS}
+    ${GST_INCLUDE_DIRS}
+    ${GST_APP_INCLUDE_DIRS}
+    ${GST_RTSP_INCLUDE_DIRS}
+    ${GST_RTSP_SERVER_INCLUDE_DIRS}
+    ${GST_VIDEO_INCLUDE_DIRS}
     ${PROTO_OUT_DIR}
 )
 
@@ -162,6 +174,11 @@ link_directories(
     ${MOSQUITTO_LIBRARY_DIRS}
     ${YAMLCPP_LIBRARY_DIRS}
     ${LIBSYSTEMD_LIBRARY_DIRS}
+    ${GST_LIBRARY_DIRS}
+    ${GST_APP_LIBRARY_DIRS}
+    ${GST_RTSP_LIBRARY_DIRS}
+    ${GST_RTSP_SERVER_LIBRARY_DIRS}
+    ${GST_VIDEO_LIBRARY_DIRS}
 )
 
 # ── 源文件 ────────────────────────────────────────────────
@@ -176,6 +193,8 @@ set(INFERENCE_SOURCES
 set(IO_SOURCES
     src/io/v4l2_capture.cpp
     src/io/file_input.cpp
+    src/io/video_encoder.cpp
+    src/io/rtsp_server.cpp
 )
 
 set(COMM_SOURCES
@@ -213,6 +232,11 @@ target_link_libraries(edge-ai-camera
     ${MOSQUITTO_LIBRARIES}
     ${YAMLCPP_LIBRARIES}
     ${LIBSYSTEMD_LIBRARIES}
+    ${GST_LIBRARIES}
+    ${GST_APP_LIBRARIES}
+    ${GST_RTSP_LIBRARIES}
+    ${GST_RTSP_SERVER_LIBRARIES}
+    ${GST_VIDEO_LIBRARIES}
     OpenSSL::Crypto
 )
 

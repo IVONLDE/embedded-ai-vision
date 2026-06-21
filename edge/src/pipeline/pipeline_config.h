@@ -60,10 +60,14 @@ struct TrackingConfig {
 struct OutputConfig {
     bool save_video = false;
     std::string video_path = "/data/results.mp4";
+    std::string video_codec = "h264";      /* "h264" 或 "h265" */
+    int video_bitrate_kbps = 4000;         /* 4Mbps */
+    int video_gop = 30;                    /* 关键帧间隔 */
 
     bool enable_rtsp = false;
     int rtsp_port = 8554;
     std::string rtsp_mount = "/edge_camera";
+    std::string rtsp_codec = "h264";
 
     bool enable_display = false;
 };
