@@ -130,8 +130,20 @@ embedded-ai-vision/
 │
 ├── docs/                 # 文档
 │   ├── ARCHITECTURE.md   #   系统架构
+│   ├── DEVELOPMENT.md    #   开发指南
 │   ├── EDGE_DEPLOY.md    #   部署指南
-│   └── PROTOCOL.md       #   通信协议
+│   ├── PROTOCOL.md       #   通信协议
+│   ├── API_REFERENCE.md  #   API 参考
+│   ├── TESTING.md        #   测试指南
+│   └── NPU_REFERENCE.md  #   NPU 技术参考
+│
+├── training/docs/        # PC 端文档
+│   ├── BACKEND_ARCHITECTURE.md  # 后端架构
+│   ├── ALGORITHM_PLUGIN_SPEC.md # 插件开发规范
+│   └── datasets/         # 数据集文档
+│
+├── CONTRIBUTING.md       # 贡献指南
+├── CHANGELOG.md          # 变更日志
 │
 └── scripts/              # 运维脚本
 ```
