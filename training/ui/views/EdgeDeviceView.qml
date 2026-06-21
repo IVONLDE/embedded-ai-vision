@@ -768,7 +768,7 @@ Rectangle {
 
                 // 未选中设备时的提示
                 Text {
-                    anchors.centerIn: parent
+                    Layout.alignment: Qt.AlignCenter
                     visible: liveData.selectedDeviceId === ""
                     text: "点击左侧设备查看实时数据"
                     font.pixelSize: 13
