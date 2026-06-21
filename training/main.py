@@ -81,6 +81,11 @@ class BackendService(QObject):
         self._bridge.ensure_default_settings()
         self._bridge.seed_default_algorithms()
         self._bridge.facade.task_manager.mark_interrupted_tasks()
+        self._mqtt_bridge = None
+        self._telemetry_thread = None
+        self._telemetry_stop = threading.Event()
+        self._last_detection_ts: dict[str, int] = {}  # device_id -> timestamp_us
+        self._fps_estimate: dict[str, float] = {}       # device_id -> fps
 
 
     def _run_in_background(self, task_id: int, runner, status_signal, success_msg: str):
@@ -616,11 +621,33 @@ class BackendService(QObject):
 
     def _on_mqtt_detection(self, data):
         """MQTT 检测结果回调 (从 MqttBridge)"""
+        did = data.device_id
+        ts = data.timestamp_us
+
+        # 估算 FPS
+        fps = 0.0
+        if did in self._last_detection_ts:
+            dt_us = ts - self._last_detection_ts[did]
+            if dt_us > 0:
+                fps = 1000000.0 / dt_us
+                self._fps_estimate[did] = round(fps, 1)
+        self._last_detection_ts[did] = ts
+        fps = self._fps_estimate.get(did, 0.0)
+
         self.edgeDetectionReceived.emit({
-            "device_id": data.device_id,
+            "device_id": did,
             "frame_index": data.frame_index,
-            "timestamp_us": data.timestamp_us,
+            "timestamp_us": ts,
             "detections": data.detections or [],
+        })
+
+        # 检测数据到达 = 设备在线, 自动合成心跳信号 (含 FPS 估算)
+        self.edgeHealthReceived.emit({
+            "device_id": did,
+            "status": "online",
+            "fps": fps,
+            "frame_index": data.frame_index,
+            "timestamp": ts // 1000,
         })
 
     def _on_mqtt_health(self, data):
@@ -650,6 +677,84 @@ class BackendService(QObject):
             print("[MQTT Bridge] paho-mqtt 未安装, MQTT 实时数据不可用")
         except Exception as e:
             print(f"[MQTT Bridge] 启动失败: {e}")
+
+        # 启动遥测轮询线程 (每5秒从板子获取 CPU 温度、NPU 使用率)
+        self._start_telemetry_poll()
+
+    def _start_telemetry_poll(self):
+        """启动后台遥测轮询 (SSH 读取板子 CPU 温度、NPU 使用率)"""
+        if self._telemetry_thread and self._telemetry_thread.is_alive():
+            return
+
+        def poll_loop():
+            import subprocess
+            while not self._telemetry_stop.wait(5.0):  # 每5秒
+                try:
+                    # 获取所有已注册设备
+                    devices = self._bridge.facade.edge_service.list_devices()
+                    for dev in devices:
+                        host = dev.get("host", "")
+                        did = dev.get("device_id", "")
+                        if not host or dev.get("status") not in ("online", "offline"):
+                            continue
+
+                        # SSH 读取 CPU 温度和 NPU/GPU 使用率
+                        try:
+                            r = subprocess.run(
+                                ["ssh", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
+                                 f"toybrick@{host}",
+                                 # CPU 温度 (thermal_zone0)
+                                 "cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null; "
+                                 # GPU 当前频率 (代替 NPU)
+                                 "cat /sys/class/devfreq/ff9a0000.gpu/cur_freq 2>/dev/null; "
+                                 # GPU 最大频率
+                                 "cat /sys/class/devfreq/ff9a0000.gpu/max_freq 2>/dev/null"],
+                                capture_output=True, text=True, timeout=5,
+                            )
+                            if r.returncode == 0 and r.stdout.strip():
+                                lines = r.stdout.strip().split('\n')
+                                cpu_temp = 0.0
+                                npu_usage = 0.0
+
+                                # CPU 温度 (单位: 毫度 → 度)
+                                if len(lines) >= 1 and lines[0].strip().isdigit():
+                                    cpu_temp = int(lines[0].strip()) / 1000.0
+
+                                # NPU 使用率 (当前频率 / 最大频率)
+                                if len(lines) >= 3:
+                                    cur = int(lines[1].strip()) if lines[1].strip().isdigit() else 0
+                                    mx = int(lines[2].strip()) if lines[2].strip().isdigit() else 1
+                                    if mx > 0:
+                                        npu_usage = round(cur / mx * 100, 1)
+
+                                fps = self._fps_estimate.get(did, 0.0)
+
+                                self.edgeHealthReceived.emit({
+                                    "device_id": did,
+                                    "status": "online",
+                                    "fps": fps,
+                                    "npu_usage": npu_usage,
+                                    "cpu_temp": cpu_temp,
+                                })
+
+                                # 更新数据库
+                                try:
+                                    self._bridge.facade.edge_service.on_heartbeat(did, {
+                                        "status": "online",
+                                        "fps": fps,
+                                        "npu_usage": npu_usage,
+                                        "cpu_temp": cpu_temp,
+                                    })
+                                except Exception:
+                                    pass
+                        except (subprocess.TimeoutExpired, Exception):
+                            pass
+                except Exception:
+                    pass
+
+        self._telemetry_stop.clear()
+        self._telemetry_thread = threading.Thread(target=poll_loop, daemon=True)
+        self._telemetry_thread.start()
 
     def _restart_mqtt_bridge(self, broker_host: str, broker_port: int):
         """重启 MQTT Bridge (使用新配置)"""

@@ -114,6 +114,7 @@ Rectangle {
 
             liveData.liveFrameIndex = data.frame_index
             liveData.liveDetectionCount = (data.detections || []).length
+            liveData.liveStatus = "online"
 
             // 统计类别
             if (data.detections && data.detections.length > 0) {
@@ -126,19 +127,36 @@ Rectangle {
             if (hist.length > 30) hist.shift()
             liveData.detectionHistory = hist
 
-            // 估算 FPS (基于 timestamp_us 差值)
+            // 更新设备列表中的状态
+            for (var i = 0; i < deviceModel.count; i++) {
+                if (deviceModel.get(i).device_id === did) {
+                    deviceModel.setProperty(i, "status", "online")
+                    break
+                }
+            }
+
+            // 更新详情面板
+            detailPanel.deviceStatus = "online"
             detectionCounter++
         }
 
-        // 心跳实时更新
+        // 心跳实时更新 (含遥测: CPU温度、NPU、FPS、帧数等)
         function onEdgeHealthReceived(data) {
             var did = data.device_id
             liveData.liveStatus = data.status
+
+            // 更新遥测数据
+            if (data.fps !== undefined) liveData.liveFps = data.fps
+            if (data.npu_usage !== undefined) detailPanel.deviceNpu = data.npu_usage
+            if (data.cpu_temp !== undefined) detailPanel.deviceCpuTemp = data.cpu_temp
 
             // 更新设备列表中的状态
             for (var i = 0; i < deviceModel.count; i++) {
                 if (deviceModel.get(i).device_id === did) {
                     deviceModel.setProperty(i, "status", data.status)
+                    if (data.fps !== undefined) deviceModel.setProperty(i, "fps", data.fps)
+                    if (data.npu_usage !== undefined) deviceModel.setProperty(i, "npu_usage", data.npu_usage)
+                    if (data.cpu_temp !== undefined) deviceModel.setProperty(i, "cpu_temp", data.cpu_temp)
                     break
                 }
             }
@@ -146,6 +164,9 @@ Rectangle {
             // 如果是选中设备，更新详情
             if (did === liveData.selectedDeviceId) {
                 detailPanel.deviceStatus = data.status
+                if (data.fps !== undefined) detailPanel.deviceFps = data.fps
+                if (data.npu_usage !== undefined) detailPanel.deviceNpu = data.npu_usage
+                if (data.cpu_temp !== undefined) detailPanel.deviceCpuTemp = data.cpu_temp
                 heartbeatCounter++
             }
         }
