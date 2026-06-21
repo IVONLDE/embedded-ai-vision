@@ -811,3 +811,43 @@ class BackendBridge:
             "payload": item.payload_json,
             "created_at": to_local_isoformat(item.created_at),
         }
+
+    # ── MQTT 配置 ─────────────────────────────────────────────
+
+    def get_mqtt_config(self) -> dict:
+        """获取当前 MQTT 配置 (broker 地址和端口)"""
+        try:
+            host = self.facade.settings_service.get_setting("mqtt.broker_host")
+            port = self.facade.settings_service.get_setting("mqtt.broker_port")
+            return {
+                "ok": True,
+                "data": {
+                    "broker_host": host or "debian10.local",
+                    "broker_port": int(port) if port else 1883,
+                },
+            }
+        except Exception as exc:
+            return _normalize_error(exc)
+
+    def update_mqtt_config(self, broker_host: str, broker_port: int) -> dict:
+        """更新 MQTT 配置并持久化"""
+        try:
+            # 保存到设置
+            self.facade.settings_service.update_setting("mqtt.broker_host", broker_host)
+            self.facade.settings_service.update_setting("mqtt.broker_port", broker_port)
+            self.facade.log_repository.add(
+                self.facade.session_factory(),
+                level="info",
+                action="update_mqtt_config",
+                resource_type="mqtt",
+                message=f"MQTT config updated: {broker_host}:{broker_port}",
+            )
+            return {
+                "ok": True,
+                "data": {
+                    "broker_host": broker_host,
+                    "broker_port": broker_port,
+                },
+            }
+        except Exception as exc:
+            return _normalize_error(exc)

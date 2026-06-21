@@ -46,6 +46,14 @@ Item {
             root.previewMaxSamples = payload["preview.max_samples"] ? Number(payload["preview.max_samples"].value) : 100
             root.logRetentionDays = payload["log.retention_days"] ? Number(payload["log.retention_days"].value) : 30
 
+            // 加载 MQTT 配置
+            if (payload["mqtt.broker_host"]) {
+                mqttHostInput.text = String(payload["mqtt.broker_host"].value)
+            }
+            if (payload["mqtt.broker_port"]) {
+                mqttPortSpinBox.value = Number(payload["mqtt.broker_port"].value)
+            }
+
             var idxMap = {"light":0, "seamist":1, "blue":2, "ocean":3, "deepsea":4, "dark":5}
             themeSelector.currentIndex = idxMap[themeValue] !== undefined ? idxMap[themeValue] : 0
 
@@ -286,6 +294,98 @@ Item {
                             id: retentionSpinBox
                             from: 1; to: 365; value: root.logRetentionDays
                             background: Rectangle { color: root.bgDark; border.color: root.borderColor; border.width: 1; radius: 4 }
+                        }
+                    }
+                }
+            }
+
+            // ── 网络配置 (MQTT) ──────────────────────────────
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 200
+                color: root.panelBg
+                radius: 8
+                border.color: root.borderColor
+                border.width: 1
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 20
+                    spacing: 16
+
+                    Text { text: "网络配置"; color: root.textColor; font.pixelSize: 16; font.bold: true }
+
+                    RowLayout {
+                        spacing: 16
+                        Text { text: "Broker 地址"; color: root.textMuted; Layout.preferredWidth: 110 }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            height: 36
+                            color: root.bgDark
+                            radius: 4
+                            border.color: root.borderColor
+                            border.width: 1
+
+                            TextInput {
+                                id: mqttHostInput
+                                anchors.fill: parent
+                                leftPadding: 10
+                                verticalAlignment: TextInput.AlignVCenter
+                                color: root.primaryColor
+                                text: "debian10.local"
+                                selectByMouse: true
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        spacing: 16
+                        Text { text: "Broker 端口"; color: root.textMuted; Layout.preferredWidth: 110 }
+                        SpinBox {
+                            id: mqttPortSpinBox
+                            from: 1; to: 65535; value: 1883
+                            background: Rectangle { color: root.bgDark; border.color: root.borderColor; border.width: 1; radius: 4 }
+                        }
+
+                        // 连接状态指示器
+                        Rectangle {
+                            width: 10; height: 10; radius: 5
+                            color: mqttConnected ? root.successColor : "#9E9E9E"
+                            property bool mqttConnected: backendService.testMqttConnection()
+                        }
+                        Text {
+                            text: backendService.testMqttConnection() ? "已连接" : "未连接"
+                            font.pixelSize: 12
+                            color: root.textMuted
+                        }
+
+                        Item { Layout.fillWidth: true }
+
+                        Button {
+                            text: "测试连接"
+                            font.pixelSize: 12
+                            background: Rectangle { color: parent.hovered ? root.tableHoverBg : root.bgDark; border.color: root.borderColor; border.width: 1; radius: 4 }
+                            contentItem: Text { text: parent.text; color: root.textColor; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            onClicked: {
+                                var connected = backendService.testMqttConnection()
+                                root.showToast(connected ? "MQTT 连接正常" : "MQTT 未连接")
+                            }
+                        }
+
+                        Button {
+                            text: "保存并重连"
+                            font.pixelSize: 12
+                            highlighted: true
+                            background: Rectangle { color: root.primaryColor; radius: 4 }
+                            contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 12; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            onClicked: {
+                                var result = backendService.updateMqttConfig(mqttHostInput.text, mqttPortSpinBox.value)
+                                if (result && result.ok) {
+                                    root.showToast("MQTT 配置已保存并重连")
+                                } else {
+                                    root.showToast((result && result.message) || "配置保存失败")
+                                }
+                            }
                         }
                     }
                 }

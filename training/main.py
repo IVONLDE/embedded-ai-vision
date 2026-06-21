@@ -612,6 +612,7 @@ class BackendService(QObject):
 
     edgeDetectionReceived = Signal(dict)
     edgeHealthReceived = Signal(dict)
+    mqttConfigUpdated = Signal(dict)  # MQTT 配置更新信号
 
     def _on_mqtt_detection(self, data):
         """MQTT 检测结果回调 (从 MqttBridge)"""
@@ -650,6 +651,58 @@ class BackendService(QObject):
         except Exception as e:
             print(f"[MQTT Bridge] 启动失败: {e}")
 
+    def _restart_mqtt_bridge(self, broker_host: str, broker_port: int):
+        """重启 MQTT Bridge (使用新配置)"""
+        if hasattr(self, '_mqtt_bridge') and self._mqtt_bridge:
+            self._mqtt_bridge.stop()
+        self._start_mqtt_bridge(broker_host, broker_port)
+
+    # ── MQTT 配置 Slots ─────────────────────────────────────
+
+    @Slot(result=dict)
+    def getMqttConfig(self) -> dict:
+        """获取 MQTT 配置"""
+        return self._bridge.get_mqtt_config()
+
+    @Slot(str, int, result=dict)
+    def updateMqttConfig(self, broker_host: str, broker_port: int) -> dict:
+        """更新 MQTT 配置并重连"""
+        result = self._bridge.update_mqtt_config(broker_host, broker_port)
+        if result.get("ok"):
+            self._restart_mqtt_bridge(broker_host, broker_port)
+            self.mqttConfigUpdated.emit({
+                "broker_host": broker_host,
+                "broker_port": broker_port,
+                "connected": getattr(self._mqtt_bridge, 'connected', False) if hasattr(self, '_mqtt_bridge') else False,
+            })
+        return result
+
+    @Slot(result=bool)
+    def testMqttConnection(self) -> bool:
+        """测试当前 MQTT 连接状态"""
+        if hasattr(self, '_mqtt_bridge') and self._mqtt_bridge:
+            return self._mqtt_bridge.connected
+        return False
+
+    # ── 设备发现 ────────────────────────────────────────────
+
+    edgeDeviceDiscovered = Signal(dict)
+
+    @Slot(result=list)
+    def scanEdgeDevices(self) -> list:
+        """扫描局域网内的边缘设备 (mDNS)"""
+        try:
+            from backend.services.device_discovery_service import DeviceDiscoveryService
+            discovery = DeviceDiscoveryService()
+            devices = discovery.scan(timeout=5.0)
+            return devices
+        except ImportError:
+            print("[DeviceDiscovery] zeroconf 未安装, 设备发现不可用")
+            return []
+        except Exception as e:
+            print(f"[DeviceDiscovery] 扫描失败: {e}")
+            return []
+
 
 
 def start_qml_app():
@@ -660,8 +713,10 @@ def start_qml_app():
 
     backend_service = BackendService()
 
-    # 启动 MQTT Bridge (直连板子端 Broker)
-    backend_service._start_mqtt_bridge("10.126.121.115", 1883)
+    # 从设置服务读取 MQTT 配置 (而非硬编码)
+    mqtt_host = backend_service._bridge.get_mqtt_config().get("data", {}).get("broker_host", "debian10.local")
+    mqtt_port = backend_service._bridge.get_mqtt_config().get("data", {}).get("broker_port", 1883)
+    backend_service._start_mqtt_bridge(mqtt_host, mqtt_port)
 
     context = engine.rootContext()
     context.setContextProperty("backendService", backend_service)

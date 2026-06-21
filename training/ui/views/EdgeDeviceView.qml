@@ -49,6 +49,32 @@ Rectangle {
         property var detectionHistory: []   // 最近N帧目标数
     }
 
+    // ── 设备扫描 ────────────────────────────────────────────
+    Timer {
+        id: scanTimer
+        interval: 6000  // 扫描需要约5秒
+        repeat: false
+        onTriggered: {
+            var devices = backendService.scanEdgeDevices()
+            if (devices.length > 0) {
+                scanResultModel.clear()
+                for (var i = 0; i < devices.length; i++) {
+                    scanResultModel.append(devices[i])
+                }
+                scanResultDialog.open()
+                otaStatusText.text = "发现 " + devices.length + " 台设备"
+                otaStatusText.color = root.successColor
+            } else {
+                otaStatusText.text = "未发现设备 (确保设备已开机且在同一局域网)"
+                otaStatusText.color = root.textMuted
+            }
+        }
+    }
+
+    ListModel {
+        id: scanResultModel
+    }
+
     // ── 初始化 ───────────────────────────────────────────
     Component.onCompleted: {
         refreshDevices()
@@ -188,6 +214,17 @@ Rectangle {
                     }
 
                     Button {
+                        text: "扫描设备"
+                        font.pixelSize: 12
+                        highlighted: true
+                        onClicked: {
+                            otaStatusText.text = "正在扫描局域网设备..."
+                            otaStatusText.color = root.textMuted
+                            scanTimer.start()
+                        }
+                    }
+
+                    Button {
                         text: "注册设备"
                         font.pixelSize: 12
                         highlighted: true
@@ -211,6 +248,34 @@ Rectangle {
                         border.color: model.device_id === liveData.selectedDeviceId ? root.primaryColor : root.borderColor
                         border.width: model.device_id === liveData.selectedDeviceId ? 2 : 1
                         radius: 6
+
+                        // MouseArea 放在按钮 RowLayout 之前声明，
+                        // 这样按钮的 Z 顺序更高，点击事件不会被 MouseArea 拦截
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            propagateComposedEvents: true
+                            onEntered: parent.color = Qt.rgba(1, 1, 1, 0.05)
+                            onExited: parent.color = model.device_id === liveData.selectedDeviceId ? Qt.rgba(0.11, 0.31, 0.85, 0.08) : root.bgDark
+                            onClicked: {
+                                liveData.selectedDeviceId = model.device_id
+                                detailPanel.deviceId = model.device_id
+                                detailPanel.deviceName = model.name || model.device_id
+                                detailPanel.deviceHost = model.host
+                                detailPanel.deviceStatus = model.status
+                                detailPanel.deviceScene = model.scene || "-"
+                                detailPanel.deviceModel = model.model_version || "-"
+                                detailPanel.deviceFps = model.fps || 0
+                                detailPanel.deviceNpu = model.npu_usage || 0
+                                detailPanel.deviceCpuTemp = model.cpu_temp || 0
+                                // 重置实时数据
+                                liveData.liveFrameIndex = 0
+                                liveData.liveDetectionCount = 0
+                                liveData.detectionHistory = []
+                                liveData.liveStatus = model.status
+                                mouse.accepted = false
+                            }
+                        }
 
                         RowLayout {
                             anchors.fill: parent
@@ -295,32 +360,6 @@ Rectangle {
                                         refreshDevices()
                                     }
                                 }
-                            }
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            propagateComposedEvents: true
-                            onEntered: parent.color = Qt.rgba(1, 1, 1, 0.05)
-                            onExited: parent.color = model.device_id === liveData.selectedDeviceId ? Qt.rgba(0.11, 0.31, 0.85, 0.08) : root.bgDark
-                            onClicked: {
-                                liveData.selectedDeviceId = model.device_id
-                                detailPanel.deviceId = model.device_id
-                                detailPanel.deviceName = model.name || model.device_id
-                                detailPanel.deviceHost = model.host
-                                detailPanel.deviceStatus = model.status
-                                detailPanel.deviceScene = model.scene || "-"
-                                detailPanel.deviceModel = model.model_version || "-"
-                                detailPanel.deviceFps = model.fps || 0
-                                detailPanel.deviceNpu = model.npu_usage || 0
-                                detailPanel.deviceCpuTemp = model.cpu_temp || 0
-                                // 重置实时数据
-                                liveData.liveFrameIndex = 0
-                                liveData.liveDetectionCount = 0
-                                liveData.detectionHistory = []
-                                liveData.liveStatus = model.status
-                                mouse.accepted = false
                             }
                         }
                     }
@@ -658,6 +697,131 @@ Rectangle {
                         refreshDevices()
                         sceneDialog.close()
                     }
+                }
+            }
+        }
+    }
+
+    // ── 扫描结果对话框 ────────────────────────────────────
+    Dialog {
+        id: scanResultDialog
+        title: "发现边缘设备"
+        modal: true
+        anchors.centerIn: parent
+        width: 500
+        height: 400
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 12
+
+            Text {
+                text: "以下设备在局域网中被发现，点击注册可添加到设备列表："
+                color: root.textColor
+                font.pixelSize: 14
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+
+            ListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                model: scanResultModel
+                clip: true
+                spacing: 8
+
+                delegate: Rectangle {
+                    width: ListView.view.width
+                    height: 60
+                    color: root.bgDark
+                    radius: 6
+                    border.color: root.borderColor
+                    border.width: 1
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 12
+
+                        // 设备图标
+                        Rectangle {
+                            width: 36; height: 36; radius: 18
+                            color: root.successColor
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: "AI"
+                                font.pixelSize: 12
+                                font.bold: true
+                                color: "white"
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+
+                            Text {
+                                text: model.name || "未知设备"
+                                font.pixelSize: 14
+                                font.bold: true
+                                color: root.textColor
+                            }
+                            Text {
+                                text: model.host + ":" + model.port
+                                font.pixelSize: 12
+                                color: root.textMuted
+                            }
+                            Text {
+                                text: model.properties ? "场景: " + (model.properties.scene || "未知") + " | 版本: " + (model.properties.app_version || "未知") : ""
+                                font.pixelSize: 11
+                                color: root.textMuted
+                            }
+                        }
+
+                        Button {
+                            text: "注册"
+                            font.pixelSize: 11
+                            highlighted: true
+                            onClicked: {
+                                var result = backendService.registerEdgeDevice(
+                                    model.name || ("discovered-" + model.host),
+                                    model.name || "自动发现设备",
+                                    model.host,
+                                    model.port || 50051
+                                )
+                                otaStatusText.text = result.message || "注册完成"
+                                refreshDevices()
+                            }
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Button {
+                    text: "注册全部"
+                    highlighted: true
+                    onClicked: {
+                        for (var i = 0; i < scanResultModel.count; i++) {
+                            var item = scanResultModel.get(i)
+                            backendService.registerEdgeDevice(
+                                item.name || ("discovered-" + item.host),
+                                item.name || "自动发现设备",
+                                item.host,
+                                item.port || 50051
+                            )
+                        }
+                        refreshDevices()
+                        scanResultDialog.close()
+                        otaStatusText.text = "已注册 " + scanResultModel.count + " 台设备"
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "关闭"
+                    onClicked: scanResultDialog.close()
                 }
             }
         }

@@ -40,3 +40,5 @@ pafy
 gitpython
 ipython
 torch-npu
+paho-mqtt>=1.6.0
+zeroconf>=0.100.0

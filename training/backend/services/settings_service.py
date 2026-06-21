@@ -17,6 +17,8 @@ class SettingsService(ServiceBase):
         "task.max_workers": {"value": 2, "description": "Maximum concurrent task workers"},
         "preview.max_samples": {"value": 100, "description": "Maximum preview samples"},
         "log.retention_days": {"value": 30, "description": "Operation log retention days"},
+        "mqtt.broker_host": {"value": "debian10.local", "description": "MQTT broker host address"},
+        "mqtt.broker_port": {"value": 1883, "description": "MQTT broker port"},
     }
 
     def get_system_status(self) -> dict:
