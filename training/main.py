@@ -492,7 +492,9 @@ class BackendService(QObject):
 
     @Slot(str, str, str, int, result="QVariant")
     def registerEdgeDevice(self, deviceId: str, name: str, host: str, grpcPort: int = 50051) -> dict:
+        print(f"[BackendService] registerEdgeDevice: id={deviceId}, name={name}, host={host}, port={grpcPort}")
         result = self._bridge.register_edge_device(deviceId, name, host, grpcPort)
+        print(f"[BackendService] register result: {result}")
         self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
         return result
 
@@ -502,7 +504,23 @@ class BackendService(QObject):
 
     @Slot(str, result=list)
     def listEdgeDevices(self, status: str) -> list:
-        return self._bridge.list_edge_devices(status)
+        devices = self._bridge.list_edge_devices(status)
+        # 过滤为 QML ListModel 可用的扁平字段
+        result = []
+        for d in devices:
+            result.append({
+                "device_id": d.get("device_id", ""),
+                "name": d.get("name", ""),
+                "host": d.get("host", ""),
+                "status": d.get("status", "unknown"),
+                "scene": d.get("scene", ""),
+                "model_version": d.get("model_version", ""),
+                "fps": d.get("fps", 0),
+                "npu_usage": d.get("npu_usage", 0),
+                "cpu_temp": d.get("cpu_temp", 0),
+            })
+        print(f"[BackendService] listEdgeDevices: {len(result)} devices for QML")
+        return result
 
     @Slot(str, result=dict)
     def unregisterEdgeDevice(self, deviceId: str) -> dict:
@@ -513,36 +531,48 @@ class BackendService(QObject):
     @Slot(str, str, result=dict)
     def switchDeviceScene(self, deviceId: str, scene: str) -> dict:
         def worker():
-            result = self._bridge.switch_device_scene(deviceId, scene)
-            self.edgeDeviceOperationCompleted.emit(result)
-            self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+            try:
+                result = self._bridge.switch_device_scene(deviceId, scene)
+                self.edgeDeviceOperationCompleted.emit(result)
+                self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+            except Exception as e:
+                self.edgeDeviceOperationCompleted.emit({"status": "error", "message": str(e)})
         threading.Thread(target=worker, daemon=True).start()
         return {"status": "pending", "message": "切换场景中..."}
 
     @Slot(str, str, str, result=dict)
     def pushModelToDevice(self, deviceId: str, modelPath: str, modelVersion: str) -> dict:
         def worker():
-            result = self._bridge.push_model_to_device(deviceId, modelPath, modelVersion)
-            self.edgeDeviceOperationCompleted.emit(result)
-            self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+            try:
+                result = self._bridge.push_model_to_device(deviceId, modelPath, modelVersion)
+                self.edgeDeviceOperationCompleted.emit(result)
+                self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+            except Exception as e:
+                self.edgeDeviceOperationCompleted.emit({"status": "error", "message": str(e)})
         threading.Thread(target=worker, daemon=True).start()
         return {"status": "pending", "message": "推送模型中..."}
 
     @Slot(str, str, result=dict)
     def rollbackDevice(self, deviceId: str, target: str) -> dict:
         def worker():
-            result = self._bridge.rollback_device(deviceId, target)
-            self.edgeDeviceOperationCompleted.emit(result)
-            self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+            try:
+                result = self._bridge.rollback_device(deviceId, target)
+                self.edgeDeviceOperationCompleted.emit(result)
+                self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+            except Exception as e:
+                self.edgeDeviceOperationCompleted.emit({"status": "error", "message": str(e)})
         threading.Thread(target=worker, daemon=True).start()
         return {"status": "pending", "message": "回滚中..."}
 
     @Slot(str, result=dict)
     def restartDevice(self, deviceId: str) -> dict:
         def worker():
-            result = self._bridge.restart_device(deviceId)
-            self.edgeDeviceOperationCompleted.emit(result)
-            self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+            try:
+                result = self._bridge.restart_device(deviceId)
+                self.edgeDeviceOperationCompleted.emit(result)
+                self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+            except Exception as e:
+                self.edgeDeviceOperationCompleted.emit({"status": "error", "message": str(e)})
         threading.Thread(target=worker, daemon=True).start()
         return {"status": "pending", "message": "重启中..."}
 
@@ -630,8 +660,8 @@ def start_qml_app():
 
     backend_service = BackendService()
 
-    # 启动 MQTT Bridge (直连板子端 Broker，无需 SSH 隧道)
-    backend_service._start_mqtt_bridge("192.168.117.161", 1883)
+    # 启动 MQTT Bridge (直连板子端 Broker)
+    backend_service._start_mqtt_bridge("10.126.121.115", 1883)
 
     context = engine.rootContext()
     context.setContextProperty("backendService", backend_service)

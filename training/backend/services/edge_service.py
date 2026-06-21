@@ -118,7 +118,7 @@ class EdgeService:
     # ── 场景切换 ────────────────────────────────────────────
 
     def switch_scene(self, device_id: str, scene: str) -> dict:
-        """切换边缘设备推理场景"""
+        """切换边缘设备推理场景 (通过 MQTT 命令)"""
         device = self._device_repo.get_by_device_id(device_id)
         if not device:
             return {"status": "error", "message": "Device not found"}
@@ -129,11 +129,16 @@ class EdgeService:
                     "message": f"Invalid scene: {scene}. Valid: {', '.join(valid_scenes)}"}
 
         try:
-            client = EdgeClient(device.host, grpc_port=device.grpc_port)
+            client = EdgeClient(
+                host=device.host,
+                grpc_port=device.grpc_port,
+                mqtt_broker_host=device.host,
+                device_id=device_id,
+            )
             resp = client.switch_scene(scene)
             if resp.get("status") == 0:
                 self._device_repo.update(device_id, scene=scene)
-                self._log_repo.add("info", f"Scene switched: {device_id} → {scene}")
+                self._log_repo.add("info", f"Scene switched: {device_id} -> {scene}")
                 return {"status": "success", "scene": scene}
             return resp
         except Exception as e:
@@ -176,7 +181,12 @@ class EdgeService:
             model_name = os.path.basename(model_path)
 
         try:
-            client = EdgeClient(device.host, grpc_port=device.grpc_port)
+            client = EdgeClient(
+                host=device.host,
+                grpc_port=device.grpc_port,
+                mqtt_broker_host=device.host,
+                device_id=device_id,
+            )
             resp = client.push_model(model_path, model_name)
 
             if resp.get("status") == 0:
@@ -265,24 +275,22 @@ class EdgeService:
     # ── 版本回滚 ────────────────────────────────────────────
 
     def rollback(self, device_id: str, target: str = "model") -> dict:
-        """
-        回滚设备到上一版本
-
-        Args:
-            device_id: 设备 ID
-            target: "model" 或 "app"
-        """
+        """回滚设备到上一版本 (通过 MQTT 命令)"""
         device = self._device_repo.get_by_device_id(device_id)
         if not device:
             return {"status": "error", "message": "Device not found"}
 
         try:
-            client = EdgeClient(device.host, grpc_port=device.grpc_port)
-            # 发送回滚命令 (MQTT 或 JSON-RPC)
-            resp = client._call("Rollback", {"target": target})
+            client = EdgeClient(
+                host=device.host,
+                grpc_port=device.grpc_port,
+                mqtt_broker_host=device.host,
+                device_id=device_id,
+            )
+            resp = client.rollback(target)
 
             if resp.get("status") == 0:
-                self._log_repo.add("info", f"Rollback success: {device_id} → {target}")
+                self._log_repo.add("info", f"Rollback success: {device_id} -> {target}")
                 return {"status": "success", "rolled_back": target}
             return resp
         except Exception as e:
@@ -292,13 +300,18 @@ class EdgeService:
     # ── 重启设备 ────────────────────────────────────────────
 
     def restart_device(self, device_id: str) -> dict:
-        """远程重启边缘设备推理服务"""
+        """远程重启边缘设备推理服务 (通过 MQTT 命令)"""
         device = self._device_repo.get_by_device_id(device_id)
         if not device:
             return {"status": "error", "message": "Device not found"}
 
         try:
-            client = EdgeClient(device.host, grpc_port=device.grpc_port)
+            client = EdgeClient(
+                host=device.host,
+                grpc_port=device.grpc_port,
+                mqtt_broker_host=device.host,
+                device_id=device_id,
+            )
             resp = client.restart()
             if resp.get("status") == 0:
                 self._device_repo.update(device_id, status="restarting")
