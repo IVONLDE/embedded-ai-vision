@@ -45,7 +45,7 @@ output:
 # ── MQTT ──────────────────────────────────────────────────
 mqtt:
   enabled: true
-  broker_host: "192.168.1.100"
+  broker_host: "192.168.117.161"
   broker_port: 1883
   client_id: "rk3399pro-edge-001"
   topic_detections: "edge/rk3399pro-001/detections"
