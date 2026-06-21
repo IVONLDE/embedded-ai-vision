@@ -81,14 +81,19 @@ class EdgeClient:
     """
     边缘设备通信客户端
 
-    支持 gRPC 直连和 SSH+JSON-RPC 两种模式。
+    支持两种模式:
+      1. MQTT 命令通道 (推荐): PC→板子 MQTT command topic
+      2. SSH + JSON-RPC (兼容): SSH 到板子, nc -U socket
     """
 
-    def __init__(self, host: str, ssh_user: str = "root",
+    def __init__(self, host: str, ssh_user: str = "toybrick",
                  grpc_port: int = 50051,
                  socket_path: str = "/tmp/edge-ai-grpc.sock",
                  ssh_timeout: int = 10,
-                 use_grpc: bool = False):
+                 use_grpc: bool = False,
+                 mqtt_broker_host: str = None,
+                 mqtt_broker_port: int = 1883,
+                 device_id: str = "rk3399pro-edge-001"):
         """
         Args:
             host: 设备 IP 地址
@@ -97,6 +102,9 @@ class EdgeClient:
             socket_path: UNIX socket 路径
             ssh_timeout: SSH 连接超时(秒)
             use_grpc: 是否尝试 gRPC 直连
+            mqtt_broker_host: MQTT Broker 地址 (默认用 host)
+            mqtt_broker_port: MQTT Broker 端口
+            device_id: 设备 ID (用于 MQTT topic)
         """
         self._host = host
         self._ssh_user = ssh_user
@@ -105,6 +113,34 @@ class EdgeClient:
         self._ssh_timeout = ssh_timeout
         self._use_grpc = use_grpc
         self._grpc_channel = None
+
+        # MQTT 命令通道
+        self._mqtt_broker_host = mqtt_broker_host or host
+        self._mqtt_broker_port = mqtt_broker_port
+        self._device_id = device_id
+        self._mqtt_client = None
+        self._mqtt_connected = False
+
+    # ── MQTT 命令通道 (PC→板子) ──────────────────────────────
+    def _send_mqtt_command(self, cmd: dict) -> dict:
+        """通过 MQTT command topic 发送命令到板子"""
+        try:
+            import paho.mqtt.client as mqtt
+        except ImportError:
+            return {"status": -1, "message": "paho-mqtt 未安装"}
+
+        topic = f"edge/{self._device_id}/command"
+        payload = json.dumps(cmd, ensure_ascii=False)
+
+        # 简单的发布-断开模式 (不需要持久连接)
+        client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+        try:
+            client.connect(self._mqtt_broker_host, self._mqtt_broker_port, keepalive=10)
+            client.publish(topic, payload, qos=1)
+            client.disconnect()
+            return {"status": 0, "message": "命令已发送"}
+        except Exception as e:
+            return {"status": -1, "message": f"MQTT 发送失败: {e}"}
 
     # ── gRPC 直连 (可选) ──────────────────────────────────
     def _init_grpc(self):
@@ -209,11 +245,11 @@ class EdgeClient:
 
     # ── SwitchScene ────────────────────────────────────────
     def switch_scene(self, scene_name: str) -> dict:
-        """切换推理场景"""
+        """切换推理场景 (通过 MQTT 命令)"""
         valid_scenes = {"face", "body", "vehicle", "defect"}
         if scene_name not in valid_scenes:
             return {"status": -1, "message": f"Invalid scene: {scene_name}"}
-        return self._call("SwitchScene", {"scene_name": scene_name})
+        return self._send_mqtt_command({"cmd": "switch_scene", "scene": scene_name})
 
     # ── PushModel ─────────────────────────────────────────
     def push_model(self, model_path: str, model_name: str = None,
@@ -288,6 +324,56 @@ class EdgeClient:
             "model_data": model_b64,
         })
 
+    # ── PushOnnx (ONNX→板子端转换RKNN) ──────────────────────
+    def push_onnx(self, onnx_path: str, model_name: str = None,
+                  model_version: str = None,
+                  sha256_checksum: str = None,
+                  quantize: bool = False,
+                  auto_rollback: bool = True) -> dict:
+        """
+        推送 ONNX 模型到边缘设备并触发板子端 RKNN 转换
+
+        流程 (方案B: PC导出ONNX → 板子端转换RKNN):
+          1. SCP 拷贝 ONNX 文件到设备
+          2. JSON-RPC 通知设备: ONNX→RKNN 转换 + 热加载
+
+        Args:
+            onnx_path: 本地 ONNX 模型路径
+            model_name: 设备上的模型名称 (默认使用文件名, .onnx→.rknn)
+            model_version: 模型版本号
+            sha256_checksum: SHA256 校验和 (默认自动计算)
+            quantize: 是否 INT8 量化
+            auto_rollback: 失败时自动回滚
+        """
+        if not os.path.isfile(onnx_path):
+            return {"status": -1, "message": f"ONNX file not found: {onnx_path}"}
+
+        if model_name is None:
+            # dog_v2.onnx → dog_v2.rknn
+            model_name = os.path.splitext(os.path.basename(onnx_path))[0] + ".rknn"
+
+        # 自动计算 SHA256
+        if sha256_checksum is None:
+            sha256_checksum = self._compute_file_sha256(onnx_path)
+
+        onnx_filename = os.path.basename(onnx_path)
+
+        # Step 1: SCP 拷贝 ONNX 到设备
+        remote_onnx = f"/opt/edge-ai/models/.ota_tmp/{onnx_filename}"
+        scp_result = self._scp(onnx_path, remote_onnx)
+        if scp_result.get("status") != 0:
+            return scp_result
+
+        # Step 2: JSON-RPC 通知设备转换 ONNX→RKNN 并安装
+        return self._call("ConvertOnnx", {
+            "onnx_path": remote_onnx,
+            "model_name": model_name,
+            "model_version": model_version or "",
+            "sha256": sha256_checksum,
+            "quantize": quantize,
+            "auto_rollback": auto_rollback,
+        })
+
     # ── AppUpdate (OTA) ────────────────────────────────────
     def push_app_update(self, app_path: str, app_version: str,
                         sha256_checksum: str = None,
@@ -322,23 +408,20 @@ class EdgeClient:
 
     # ── Rollback (OTA) ─────────────────────────────────────
     def rollback(self, target: str = "model") -> dict:
-        """
-        回滚到上一版本
-
-        Args:
-            target: "model" 或 "app"
-        """
-        return self._call("Rollback", {"target": target})
+        """回滚到上一版本 (通过 MQTT 命令)"""
+        return self._send_mqtt_command({"cmd": "rollback", "target": target})
 
     # ── UpdateConfig ───────────────────────────────────────
     def update_config(self, params: dict) -> dict:
-        """更新运行时配置参数"""
-        return self._call("UpdateConfig", params)
+        """更新运行时配置参数 (通过 MQTT 命令)"""
+        cmd = {"cmd": "update_config"}
+        cmd.update(params)
+        return self._send_mqtt_command(cmd)
 
     # ── Restart ────────────────────────────────────────────
     def restart(self) -> dict:
-        """远程重启边缘设备推理服务"""
-        return self._call("Restart")
+        """远程重启边缘设备推理服务 (通过 MQTT 命令)"""
+        return self._send_mqtt_command({"cmd": "restart"})
 
     # ── 工具方法 ────────────────────────────────────────────
 

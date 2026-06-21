@@ -671,6 +671,16 @@ class BackendBridge:
         except Exception as exc:
             return _normalize_error(exc)
 
+    def push_onnx_to_device(self, device_id: str, onnx_path: str,
+                            model_version: str = "") -> dict:
+        """推送 ONNX 到设备, 板子端做 ONNX→RKNN 转换 (方案B)"""
+        try:
+            return self.facade.edge_service.push_onnx(
+                device_id, onnx_path, model_version=model_version or None
+            )
+        except Exception as exc:
+            return _normalize_error(exc)
+
 
     def _normalize_modality(self, modality: str) -> str:
         return {

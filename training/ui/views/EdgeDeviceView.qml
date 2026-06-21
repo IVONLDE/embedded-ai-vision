@@ -1,6 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import ".."
 
 /* ── 边缘设备管理页面 ────────────────────────────────────
  *
@@ -181,13 +182,13 @@ Rectangle {
                                 Button {
                                     text: "场景"
                                     font.pixelSize: 12
-                                    onClicked: sceneDialog.deviceId = model.device_id; sceneDialog.open()
+                                    onClicked: { sceneDialog.deviceId = model.device_id; sceneDialog.open() }
                                 }
 
                                 Button {
                                     text: "推送"
                                     font.pixelSize: 12
-                                    onClicked: deployDialog.targetDeviceId = model.device_id; deployDialog.open()
+                                    onClicked: { deployDialog.targetDeviceId = model.device_id; deployDialog.open() }
                                 }
 
                                 Button {
@@ -421,7 +422,7 @@ Rectangle {
                     highlighted: true
                     onClicked: {
                         var result = backendService.registerEdgeDevice(
-                            regDeviceId.text, regDeviceName.text, regDeviceHost.text
+                            regDeviceId.text, regDeviceName.text, regDeviceHost.text, 50051
                         )
                         otaStatusText.text = result.message || "注册完成"
                         refreshDevices()

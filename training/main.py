@@ -490,7 +490,6 @@ class BackendService(QObject):
 
     # ── 边缘设备管理 + OTA Slots ───────────────────────────
 
-    @Slot(str, str, str, int, result=dict)
     @Slot(str, str, str, int, result="QVariant")
     def registerEdgeDevice(self, deviceId: str, name: str, host: str, grpcPort: int = 50051) -> dict:
         result = self._bridge.register_edge_device(deviceId, name, host, grpcPort)
@@ -567,6 +566,60 @@ class BackendService(QObject):
         self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
         return result
 
+    # ── ONNX 推送 (方案B: PC导出ONNX → 板子端转换RKNN) ──────
+
+    @Slot(str, str, str, result=dict)
+    def pushOnnxToDevice(self, deviceId: str, onnxPath: str, modelVersion: str) -> dict:
+        """推送 ONNX 到设备，板子端做 ONNX→RKNN 转换"""
+        def worker():
+            result = self._bridge.push_onnx_to_device(deviceId, onnxPath, modelVersion)
+            self.edgeDeviceOperationCompleted.emit(result)
+            self.edgeDevicesUpdated.emit(self._bridge.list_edge_devices(""))
+        threading.Thread(target=worker, daemon=True).start()
+        return {"status": "pending", "message": "推送ONNX中..."}
+
+    # ── MQTT 实时数据 ────────────────────────────────────────
+
+    edgeDetectionReceived = Signal(dict)
+    edgeHealthReceived = Signal(dict)
+
+    def _on_mqtt_detection(self, data):
+        """MQTT 检测结果回调 (从 MqttBridge)"""
+        self.edgeDetectionReceived.emit({
+            "device_id": data.device_id,
+            "frame_index": data.frame_index,
+            "timestamp_us": data.timestamp_us,
+            "detections": data.detections or [],
+        })
+
+    def _on_mqtt_health(self, data):
+        """MQTT 心跳回调 (从 MqttBridge)"""
+        self.edgeHealthReceived.emit({
+            "device_id": data.device_id,
+            "status": data.status,
+            "frame_index": data.frame_index,
+            "timestamp": data.timestamp,
+        })
+
+    def _start_mqtt_bridge(self, broker_host: str, broker_port: int = 1883):
+        """启动 MQTT 订阅桥接"""
+        try:
+            from backend.mqtt_bridge import MqttBridge
+            self._mqtt_bridge = MqttBridge(
+                broker_host=broker_host,
+                broker_port=broker_port,
+                on_detection=self._on_mqtt_detection,
+                on_health=self._on_mqtt_health,
+            )
+            if self._mqtt_bridge.start():
+                print(f"[MQTT Bridge] 已连接 {broker_host}:{broker_port}")
+            else:
+                print(f"[MQTT Bridge] 连接失败")
+        except ImportError:
+            print("[MQTT Bridge] paho-mqtt 未安装, MQTT 实时数据不可用")
+        except Exception as e:
+            print(f"[MQTT Bridge] 启动失败: {e}")
+
 
 
 def start_qml_app():
@@ -576,6 +629,9 @@ def start_qml_app():
     engine = QQmlApplicationEngine()
 
     backend_service = BackendService()
+
+    # 启动 MQTT Bridge (直连板子端 Broker，无需 SSH 隧道)
+    backend_service._start_mqtt_bridge("192.168.117.161", 1883)
 
     context = engine.rootContext()
     context.setContextProperty("backendService", backend_service)

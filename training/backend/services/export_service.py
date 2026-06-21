@@ -54,7 +54,8 @@ class ExportService:
                      model_type: str = "yolov5",
                      scene: str = "vehicle",
                      quantize: bool = False,
-                     calib_dir: str = None) -> dict:
+                     calib_dir: str = None,
+                     onnx_only: bool = False) -> dict:
         """
         导出 PyTorch 模型为 RKNN 格式
 
@@ -64,6 +65,7 @@ class ExportService:
         @param scene:        face / body / vehicle / defect
         @param quantize:     是否 INT8 量化
         @param calib_dir:    校准图片目录
+        @param onnx_only:    只导出 ONNX，不做 RKNN 转换 (板子端转换)
         @return: {"status": "success", "data": {...}}
         """
         if not os.path.exists(pt_path):
@@ -96,6 +98,24 @@ class ExportService:
                 export_onnx_osnet(pt_path, onnx_path)
             else:
                 return {"status": "error", "message": f"Unknown model type: {model_type}"}
+
+            # ONNX-only 模式: 只导出 ONNX，由板子端做 RKNN 转换
+            if onnx_only:
+                sha256 = self._compute_sha256(onnx_path)
+                file_size = os.path.getsize(onnx_path)
+                duration = time.time() - start_time
+                print(f"[ExportService] ONNX exported (onnx_only): {onnx_path} "
+                      f"({file_size} bytes, {duration:.1f}s)")
+                return {
+                    "status": "success",
+                    "data": {
+                        "onnx_path": onnx_path,
+                        "sha256": sha256,
+                        "file_size": file_size,
+                        "duration_sec": round(duration, 1),
+                        "onnx_only": True,
+                    }
+                }
 
             # Step 2: ONNX → RKNN
             export_rknn(onnx_path, rknn_path,
