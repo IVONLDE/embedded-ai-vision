@@ -8,8 +8,9 @@ active_scene: "vehicle"
 
 # ── 输入源 ────────────────────────────────────────────────
 input:
-  type: "v4l2_camera"
-  v4l2_device: "/dev/video0"
+  type: "video_file"
+  file_path: "/opt/edge-ai/models/test_short.mp4"
+  # v4l2_device: "/dev/video0"
   v4l2_width: 1920
   v4l2_height: 1080
   v4l2_fps: 30
