@@ -3,7 +3,7 @@
 Device Discovery Service — 使用 mDNS/Zeroconf 发现边缘设备
 
 扫描 _edge-ai._tcp.local. 服务类型, 自动发现局域网内的边缘 AI 设备。
-发现到的设备可用于快速注册到 ISG-mian 设备列表。
+发现到的设备可用于快速注册到设备列表。
 
 用法:
     from backend.services.device_discovery_service import DeviceDiscoveryService
@@ -15,13 +15,12 @@ Device Discovery Service — 使用 mDNS/Zeroconf 发现边缘设备
 
 from __future__ import annotations
 
-import socket
 import time
 from dataclasses import dataclass
 from typing import Optional, Callable
 
 try:
-    from zeroconf import Zeroconf, ServiceBrowser, ServiceInfo, ServiceStateChange
+    from zeroconf import Zeroconf, ServiceBrowser, ServiceStateChange
     HAS_ZEROCONF = True
 except ImportError:
     HAS_ZEROCONF = False
@@ -42,6 +41,44 @@ class DiscoveredDevice:
             "port": self.port,
             "properties": self.properties,
         }
+
+
+class _DeviceListener:
+    """zeroconf ServiceListener 实现 (兼容 0.149+ API)"""
+
+    def __init__(self, on_found: Callable[[DiscoveredDevice], None] = None):
+        self._on_found = on_found
+
+    def add_service(self, zc, type_, name):
+        info = zc.get_service_info(type_, name)
+        if info:
+            addresses = info.parsed_addresses()
+            host = addresses[0] if addresses else "unknown"
+            port = info.port or 50051
+
+            properties = {}
+            if info.properties:
+                for key, value in info.properties.items():
+                    try:
+                        properties[key.decode() if isinstance(key, bytes) else key] = \
+                            value.decode() if isinstance(value, bytes) else value
+                    except (UnicodeDecodeError, AttributeError):
+                        pass
+
+            device = DiscoveredDevice(
+                name=name.replace(f".{DeviceDiscoveryService.SERVICE_TYPE}", ""),
+                host=host,
+                port=port,
+                properties=properties,
+            )
+            if self._on_found:
+                self._on_found(device)
+
+    def update_service(self, zc, type_, name):
+        pass
+
+    def remove_service(self, zc, type_, name):
+        pass
 
 
 class DeviceDiscoveryService:
@@ -73,39 +110,15 @@ class DeviceDiscoveryService:
         self._discovered = []
         self._zeroconf = Zeroconf()
 
-        def on_service_change(zeroconf, service_type, name, state_change):
-            if state_change is ServiceStateChange.Added:
-                info = zeroconf.get_service_info(service_type, name)
-                if info:
-                    # 解析 IP 地址
-                    addresses = info.parsed_addresses()
-                    host = addresses[0] if addresses else "unknown"
-                    port = info.port or 50051
+        def on_found(device: DiscoveredDevice):
+            self._discovered.append(device)
+            if self._on_discovery:
+                self._on_discovery(device)
 
-                    # 解析 TXT 记录
-                    properties = {}
-                    if info.properties:
-                        for key, value in info.properties.items():
-                            try:
-                                properties[key.decode() if isinstance(key, bytes) else key] = \
-                                    value.decode() if isinstance(value, bytes) else value
-                            except (UnicodeDecodeError, AttributeError):
-                                pass
-
-                    device = DiscoveredDevice(
-                        name=name.replace(f".{self.SERVICE_TYPE}", ""),
-                        host=host,
-                        port=port,
-                        properties=properties,
-                    )
-                    self._discovered.append(device)
-
-                    if self._on_discovery:
-                        self._on_discovery(device)
+        listener = _DeviceListener(on_found=on_found)
 
         try:
-            browser = ServiceBrowser(self._zeroconf, self.SERVICE_TYPE, handlers=[on_service_change])
-            # 等待扫描
+            browser = ServiceBrowser(self._zeroconf, self.SERVICE_TYPE, listener=listener)
             time.sleep(timeout)
             browser.cancel()
         finally:
@@ -133,32 +146,11 @@ class DeviceDiscoveryService:
 
         self._zeroconf = Zeroconf()
 
-        def on_service_change(zeroconf, service_type, name, state_change):
-            if state_change is ServiceStateChange.Added:
-                info = zeroconf.get_service_info(service_type, name)
-                if info:
-                    addresses = info.parsed_addresses()
-                    host = addresses[0] if addresses else "unknown"
-                    port = info.port or 50051
+        def on_found(device: DiscoveredDevice):
+            on_discovery(device.to_dict())
 
-                    properties = {}
-                    if info.properties:
-                        for key, value in info.properties.items():
-                            try:
-                                properties[key.decode() if isinstance(key, bytes) else key] = \
-                                    value.decode() if isinstance(value, bytes) else value
-                            except (UnicodeDecodeError, AttributeError):
-                                pass
-
-                    device = {
-                        "name": name.replace(f".{self.SERVICE_TYPE}", ""),
-                        "host": host,
-                        "port": port,
-                        "properties": properties,
-                    }
-                    on_discovery(device)
-
-        browser = ServiceBrowser(self._zeroconf, self.SERVICE_TYPE, handlers=[on_service_change])
+        listener = _DeviceListener(on_found=on_found)
+        ServiceBrowser(self._zeroconf, self.SERVICE_TYPE, listener=listener)
         return self._zeroconf
 
     def stop_browser(self):
