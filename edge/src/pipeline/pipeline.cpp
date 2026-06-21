@@ -504,8 +504,10 @@ int pipeline_run(const PipelineConfig &cfg)
     SpscQueue<TrackResult> track_queue(qsize);
 
     /* 初始化 NPU 引擎 (主线程初始化, gRPC 线程共享) */
+    printf("[Pipeline] Creating RKNN engine...\n"); fflush(stdout);
     Rknn1Engine engine(cfg.inference.model_path.c_str(),
                        cfg.system.cpu_inference);
+    printf("[Pipeline] RKNN engine created, starting threads...\n"); fflush(stdout);
 
     /* 启动工作线程 */
     std::thread capture_th(capture_thread_func,
@@ -529,7 +531,7 @@ int pipeline_run(const PipelineConfig &cfg)
                               std::ref(cfg), &engine);
     }
 
-    printf("[Pipeline] All threads started, running...\n");
+    printf("[Pipeline] All threads started, running...\n"); fflush(stdout);
 
     /* 主循环: 100ms 轮询 shutdown */
     while (g_running.load()) {
