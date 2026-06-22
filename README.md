@@ -1,6 +1,6 @@
-# embedded-ai-vision
+# RK-NPU Cortex
 
-嵌入式 Linux 边缘 AI 通用推理平台 — 基于 RK3399Pro 的全栈方案。
+嵌入式 Linux 边缘 AI 推理平台 — 基于 RK3399Pro 的全栈方案。
 
 [![GitHub stars](https://img.shields.io/github/stars/IVONLDE/embedded-ai-vision?style=flat-square)](https://github.com/IVONLDE/embedded-ai-vision)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)

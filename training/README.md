@@ -1,6 +1,6 @@
 # ISG-mian — PC 端 AI 管控平台
 
-ISG-mian 是 embedded-ai-vision 项目的 PC 端管理平台，负责数据管理、模型训练、边缘设备管控等全流程工作。
+ISG-mian 是 RK-NPU Cortex 项目的 PC 端管理平台，负责数据管理、模型训练、边缘设备管控等全流程工作。
 
 ## 技术栈
 

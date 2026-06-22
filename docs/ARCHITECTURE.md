@@ -1,4 +1,4 @@
-# embedded-ai-vision 系统架构
+# RK-NPU Cortex 系统架构
 
 ## 项目概述
 
