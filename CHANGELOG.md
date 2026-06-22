@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- GStreamer H.264/H.265 硬件视频编码器 (`edge/src/io/video_encoder.cpp`, 388行)
+  - 基于 Rockchip MPP (mpph264enc/mpph265enc) 硬件编码
+  - 支持动态码率调整 + 关键帧请求 + 录制启停
+- RTSP 实时推流服务 (`edge/src/io/rtsp_server.cpp`, 237行)
+  - 基于 gst-rtsp-server, 独立线程运行 GLib main loop
+  - 管道: appsrc → videoconvert → mpph264enc → h264parse → rtph264pay
+- SPI 传感器字符设备驱动 (`kernel/drivers/peripheral/spi_sensor.c`, 772行)
+  - spi_driver + spi_device 框架 (符合 SPI 子系统规范)
+  - 全双工传输 (spi_sync) + ioctl 配置 (速度/模式/位宽) + sysfs 统计
+- 帧数据传递方案: 推理→跟踪→输出线程所有权转移
+  - DetectResult/TrackResult 新增 frame_data/width/height 字段
+  - 推理线程在归还 V4L2 缓冲区前 memcpy 帧数据
+  - 输出线程推入编码器/RTSP 后 delete[] 释放
+- MQTT 远程控制: 录制/RTSP 启停命令
+  - PC 端 QML 按钮发送 start/stop_recording, start/stop_rtsp
+  - 板子端输出线程轮询原子标志动态启停编码器/RTSP
 - 文档完善：新增 DEVELOPMENT.md、CONTRIBUTING.md、CHANGELOG.md、API_REFERENCE.md、TESTING.md
 - 文档完善：training/README.md 重写，training/docs/BACKEND_ARCHITECTURE.md 新增
 - gRPC 服务端完整实现（EdgeServiceImpl），支持 8 个 RPC：
@@ -22,6 +38,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - CMake proto 自动编译规则，支持 pkg-config 降级查找 gRPC
 
 ### Fixed
+- 修复 MQTT 命令转发链路断裂: handle_command() 缺少录制/RTSP 命令分支，导致 PC 端下发的 start_recording 等命令被静默丢弃
+- 修复帧复制条件: 仅检查配置文件 (save_video/enable_rtsp) 而非运行时状态，导致远程启动录制后 frame_data 为 nullptr
 - RKNN1 引擎兼容性：rknn_init2 改为 rknn_init，适配 API 1.7.5 + DRV 1.7.5 匹配，避免 TOO_MANY_CLIENT 错误
 - dump_tensor_attr 安全打印，避免未终止字符串问题
 

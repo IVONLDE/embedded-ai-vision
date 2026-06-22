@@ -147,12 +147,14 @@ embedded-ai-vision/
 1. 修改 `kernel/drivers/` 下的源码
 2. 编译内核模块：
    ```bash
-   cd kernel/drivers/camera && make
+   cd kernel/drivers/camera && make    # IMX415
+   cd kernel/drivers/peripheral && make  # UART/SPI/GPIO
    ```
 3. 部署到板子：
    ```bash
    scp imx415.ko root@192.168.1.50:/lib/modules/4.19.111/extra/
-   ssh root@192.168.1.50 "insmod /lib/modules/4.19.111/extra/imx415.ko"
+   scp spi_sensor.ko root@192.168.1.50:/lib/modules/4.19.111/extra/
+   ssh root@192.168.1.50 "insmod /lib/modules/4.19.111/extra/spi_sensor.ko"
    ```
 
 ### GStreamer 插件
@@ -286,7 +288,23 @@ mosquitto_sub -h 192.168.1.50 -t 'edge/rk3399pro-edge-001/detections' -v
 
 # 发送场景切换指令
 mosquitto_pub -h 192.168.1.50 -t 'edge/rk3399pro-edge-001/command' \
-    -m '{"cmd":"switch_scene","scene_name":"vehicle"}'
+    -m '{"command":"switch_scene","scene_name":"vehicle"}'
+
+# 远程启动视频录制
+mosquitto_pub -h 192.168.1.50 -t 'edge/rk3399pro-edge-001/command' \
+    -m '{"command":"start_recording"}'
+
+# 远程停止视频录制
+mosquitto_pub -h 192.168.1.50 -t 'edge/rk3399pro-edge-001/command' \
+    -m '{"command":"stop_recording"}'
+
+# 远程启动 RTSP 推流
+mosquitto_pub -h 192.168.1.50 -t 'edge/rk3399pro-edge-001/command' \
+    -m '{"command":"start_rtsp"}'
+
+# 远程停止 RTSP 推流
+mosquitto_pub -h 192.168.1.50 -t 'edge/rk3399pro-edge-001/command' \
+    -m '{"command":"stop_rtsp"}'
 ```
 
 ### gRPC 调试
@@ -302,6 +320,28 @@ grpcurl -plaintext 192.168.1.50:50051 EdgeService/GetStatus \
 
 # 通过 Unix Socket
 grpcurl -plaintext -unix /tmp/edge-ai-grpc.sock list
+```
+
+### SPI 传感器调试
+
+```bash
+# 检查 SPI 设备节点
+ls -la /dev/spi_sensor
+
+# 读取传感器数据
+cat /dev/spi_sensor
+
+# 查看统计信息 (sysfs)
+cat /sys/class/spi_sensor/spi_sensor/tx_bytes_total
+cat /sys/class/spi_sensor/spi_sensor/rx_bytes_total
+cat /sys/class/spi_sensor/spi_sensor/errors
+
+# 配置 SPI 参数
+# 需要编写 C 程序使用 ioctl:
+#   SPI_IOC_WR_SPEED_HZ    - 设置时钟频率
+#   SPI_IOC_WR_MODE        - 设置 SPI 模式 (0-3)
+#   SPI_IOC_WR_BITS_PER_WORD - 设置位宽
+#   SPI_IOC_TRANSFER       - 全双工传输
 ```
 
 ### 性能分析

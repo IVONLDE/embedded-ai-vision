@@ -67,12 +67,12 @@
 │ Layer 3: 多媒体中间件 (GStreamer)                                 │
 │   自定义 NPU 推理插件 (rknninference)                              │
 │   检测框绘制插件 (rknndraw)                                        │
-│   V4L2 Source → H.264 硬件编码 (MFC) → RTSP 推流                  │
+│   H.264/H.265 硬件编码 (mpph264enc/mpph265enc)                    │
+│   RTSP 实时推流 (gst-rtsp-server)                                  │
 ├──────────────────────────────────────────────────────────────────┤
 │ Layer 2: Linux 内核与驱动 (Linux 4.19)                            │
 │   设备树: CMA / NPU / I2C / MIPI CSI / UART / SPI / GPIO          │
-│   自定义驱动: IMX415 V4L2 sub-device / UART传感器 / GPIO触发       │
-│   预留: SPI/I2S 接口 (扩展音频/振动传感器)                         │
+│   自定义驱动: IMX415 V4L2 sub-device / UART传感器 / GPIO触发 / SPI传感器 │
 ├──────────────────────────────────────────────────────────────────┤
 │ Layer 1: 系统构建 (Buildroot)                                     │
 │   交叉编译工具链 / rootfs定制 / 内核裁剪 / SD卡镜像                │
@@ -94,9 +94,9 @@ embedded-ai-vision/
 │   ├── dts/rk3399pro/    #   设备树 (主设备树 + IMX415子节点)
 │   └── drivers/
 │       ├── camera/       #   IMX415 V4L2 sub-device 驱动 (I2C)
-│       └── peripheral/   #   UART传感器 + GPIO触发 字符设备驱动
+│       └── peripheral/   #   UART传感器 + GPIO触发 + SPI传感器 字符设备驱动
 │
-├── gstreamer/            # Layer 3: GStreamer 自定义插件
+├── gstreamer/            # Layer 3: GStreamer 自定义插件 + 编码推流
 │   └── plugin/
 │       ├── gstrknninference.c   # NPU 推理元素 (GstVideoFilter)
 │       └── gstrknndraw.c        # 检测框绘制元素
@@ -111,7 +111,10 @@ embedded-ai-vision/
 │       │   ├── rknn1_engine.cpp  # RKNN1 API 推理引擎 (模型无关, 支持热加载)
 │       │   ├── yolov5/           # YOLOv5 后处理 (decode + NMS)
 │       │   └── deepsort/         # SORT 跟踪 (卡尔曼 + 匈牙利)
-│       ├── io/                   # V4L2 DMA-BUF 采集 / 文件输入
+│       ├── io/
+│       │   ├── v4l2_capture.cpp  # V4L2 DMA-BUF 零拷贝采集
+│       │   ├── video_encoder.cpp # GStreamer + MPP H.264/H.265 硬件编码
+│       │   └── rtsp_server.cpp   # RTSP 实时推流服务
 │       └── comm/                 # MQTT 上报 / gRPC 服务 (8 RPC) / OTA 管理
 │
 ├── training/             # Layer 5: PC 端管理平台 (ISG-mian)
@@ -178,10 +181,12 @@ embedded-ai-vision/
 │                                        │                          │
 │                        ┌───────────────┼───────────────┐          │
 │                        ↓               ↓               ↓          │
-│                      MQTT            RTSP          Display        │
-│                   (结果上报)      (视频推流)      (本地显示)       │
-│                        │               │               │          │
-└────────────────────────┼───────────────┼───────────────┼──────────┘
+│                      MQTT          视频编码          Display      │
+│                   (结果上报)    (H.264/H.265)      (本地显示)     │
+│                        │          ↓      ↓               │          │
+│                        │      文件录制  RTSP推流          │          │
+│                        │          │      │               │          │
+└────────────────────────┼──────────┼──────┼───────────────┼──────────┘
                          │               │               │
 ┌─ PC 端 ────────────────┼───────────────┼───────────────┼──────────┐
 │                        ▼               ▼               ▼          │
@@ -189,6 +194,7 @@ embedded-ai-vision/
 │              → 实时展示         → 实时预览       → 监控面板       │
 │              → 在线纠错         → 录像存储       → 告警通知       │
 │              → 数据回收入库     → 截图标注       → 远程管控       │
+│              → MQTT远程启停录制/RTSP             → 一键控制       │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -199,12 +205,15 @@ embedded-ai-vision/
 | **设备树** | CMA 512MB / NPU / I2C / MIPI CSI / UART / SPI / GPIO / pinctrl | `kernel/dts/` |
 | **V4L2 Sub-device** | IMX415 摄像头 I2C 驱动 (regmap / controls / media pad) | `kernel/drivers/camera/` |
 | **UART 字符驱动** | 传感器数据采集 (serdev / 环形缓冲 / wait_queue / sysfs) | `kernel/drivers/peripheral/` |
+| **SPI 字符驱动** | SPI 传感器通信 (spi_sync 全双工 / ioctl 配置 / sysfs 统计) | `kernel/drivers/peripheral/` |
 | **GPIO 中断驱动** | 按键/报警触发 (gpio_to_irq / tasklet底半部 / 去抖) | `kernel/drivers/peripheral/` |
 | **GStreamer 插件** | NPU 推理元素 (GstVideoFilter / transform_frame_ip) | `gstreamer/plugin/` |
+| **GStreamer MPP** | H.264/H.265 硬件编码 (mpph264enc / mpph265enc) | `edge/src/io/` |
+| **RTSP 服务** | 实时视频推流 (gst-rtsp-server / 独立线程 GLib main loop) | `edge/src/io/` |
 | **RKNN1 API** | NPU 推理 (rknn_init/run/inputs_set/outputs_get) | `edge/src/inference/` |
 | **SORT 跟踪** | 卡尔曼滤波 + 匈牙利匹配 (纯CPU, 单核NPU适配) | `edge/src/inference/deepsort/` |
 | **V4L2 DMA-BUF** | 摄像头→NPU 零拷贝采集 (mmap / VIDIOC_EXPBUF) | `edge/src/io/` |
-| **MQTT** | 检测结果 + 心跳上报 (libmosquitto / QoS 0/1) | `edge/src/comm/` |
+| **MQTT** | 检测结果 + 心跳上报 + 远程控制 (libmosquitto / QoS 0/1 / 命令下发) | `edge/src/comm/` |
 | **gRPC** | 模型推送 / 场景切换 / OTA升级 / 远程管控 (8 RPC, Proto3) | `edge/src/comm/` + `edge/proto/` |
 | **systemd** | 服务托管 (Type=notify / cgroups / 看门狗 / 安全加固) | `edge/config/` |
 | **Buildroot** | 交叉编译 / rootfs 裁剪 / SD 卡镜像 | `buildroot-external/` |
@@ -214,22 +223,22 @@ embedded-ai-vision/
 ## 项目统计
 
 ```
-文件总数:  300+
-代码行数:  63,500+
+文件总数:  310+
+代码行数:  65,500+
 
-C (内核驱动 + GStreamer):         2,950 行
-C++ (推理应用):                   2,886 行
-头文件 (.h):                        670 行
-DTS (设备树):                       465 行
-Proto (gRPC/Protobuf):             ~182 行 (edge_service.proto + detection.proto)
+C (内核驱动 + GStreamer):         3,700 行  (+750 SPI驱动)
+C++ (推理应用 + 编码推流):         3,500 行  (+614 video_encoder + rtsp_server)
+头文件 (.h):                        820 行   (+150 编码器/RTSP/SPI头文件)
+DTS (设备树):                       480 行   (+17 SPI节点)
+Proto (gRPC/Protobuf):             ~182 行
 ─────────────────────────────────────────
-C/C++/DTS/Proto 总计:             ~7,153 行
+C/C++/DTS/Proto 总计:             ~8,682 行
 
 Python (PC 端管理平台):         ~40,000 行
-QML (GUI):                       ~3,000 行
+QML (GUI):                       ~3,030 行
 Shell (构建/部署脚本):           ~600 行
-配置 (Buildroot/systemd/YAML):  ~800 行
-文档:                            ~300 行
+配置 (Buildroot/systemd/YAML):  ~820 行
+文档:                            ~350 行
 ```
 
 ## 快速开始
@@ -277,7 +286,8 @@ sed -i 's/v4l2_camera/video_file/' /opt/edge-ai/config/pipeline.yaml
 | Eigen | ≥3.3 | 线性代数 (卡尔曼/匈牙利) |
 | libsystemd | ≥237 | systemd notify/watchdog |
 | gRPC/Protobuf | ≥1.30 | 远程管控 |
-| GStreamer | ≥1.18 | 多媒体管道 |
+| GStreamer | ≥1.18 | 多媒体管道 + 硬件编码 + RTSP 推流 |
+| gst-rtsp-server | ≥1.18 | RTSP 实时推流服务 |
 | PySide6 | ≥6.5 | PC 端 GUI |
 | PyTorch | ≥2.0 | 模型训练 |
 | RKNN-Toolkit1 | ≥1.7 | 模型导出 |
