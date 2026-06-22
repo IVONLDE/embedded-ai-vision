@@ -243,6 +243,14 @@ void MqttPublisher::handle_command(const char *topic,
         if (_cmd_callback) _cmd_callback(topic, payload, len);
     } else if (find_cmd("rollback")) {
         if (_cmd_callback) _cmd_callback(topic, payload, len);
+    } else if (find_cmd("start_recording")) {
+        if (_cmd_callback) _cmd_callback(topic, payload, len);
+    } else if (find_cmd("stop_recording")) {
+        if (_cmd_callback) _cmd_callback(topic, payload, len);
+    } else if (find_cmd("start_rtsp")) {
+        if (_cmd_callback) _cmd_callback(topic, payload, len);
+    } else if (find_cmd("stop_rtsp")) {
+        if (_cmd_callback) _cmd_callback(topic, payload, len);
     } else if (find_cmd("restart")) {
         /* 重启是特殊指令, 直接发信号 */
         kill(getpid(), SIGTERM);

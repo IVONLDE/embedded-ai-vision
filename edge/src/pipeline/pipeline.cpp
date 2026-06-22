@@ -276,10 +276,11 @@ static void inference_thread_func(const PipelineConfig &cfg,
         }
 
         /* 复制帧数据用于编码/推流 (必须在归还 V4L2 缓冲区之前)
-         * 仅在需要视频输出时复制, 避免不必要的内存开销
+         * 编码器始终初始化 (支持远程 MQTT 命令随时启动录制/RTSP),
+         * 因此帧数据始终需要复制, 否则远程启动录制后推帧会收到 nullptr
          * RGB24: width × height × 3 字节 */
         unsigned char *frame_copy = nullptr;
-        if (cfg.output.save_video || cfg.output.enable_rtsp) {
+        {
             size_t frame_size = (size_t)frame.width * frame.height * 3;
             frame_copy = new(std::nothrow) unsigned char[frame_size];
             if (frame_copy) {
