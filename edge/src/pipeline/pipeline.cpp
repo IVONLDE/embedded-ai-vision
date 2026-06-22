@@ -32,12 +32,24 @@
 #include <condition_variable>
 #include <csignal>
 #include <cstring>
+#include <ctime>
+#include <fcntl.h>
 #include <iostream>
 #include <mutex>
 #include <queue>
 #include <thread>
 #include <unistd.h>
 #include <new>
+
+#ifdef HAVE_LIBSYSTEMD
+#include <systemd/sd-daemon.h>
+#else
+/* fallback: sd_notify 空实现 (无 systemd 环境编译兼容) */
+static inline int sd_notify(int unset_environment, const char *state) {
+    (void)unset_environment; (void)state;
+    return 0;
+}
+#endif
 
 /* ── 全局状态 ──────────────────────────────────────────── */
 static std::atomic<bool> g_running{true};
@@ -47,6 +59,62 @@ static GrpcServer *g_grpc_server = nullptr;  /* 用于 MQTT 命令转发 */
 /* 远程控制标志 (PC 端通过 MQTT 命令设置) */
 static std::atomic<bool> g_recording_requested{false};
 static std::atomic<bool> g_rtsp_requested{false};
+
+/* ── 线程健康监控 ──────────────────────────────────────── */
+/*
+ * 每个工作线程定期更新心跳时间戳 (原子操作, 无锁)
+ * 主循环每 100ms 检查所有线程心跳, 超时 (5s) 则判定线程异常
+ * 异常时触发优雅关机, 避免管线半死不活
+ */
+enum class ThreadRole {
+    CAPTURE,    /* 采集线程 */
+    INFERENCE,  /* 推理线程 */
+    TRACKING,   /* 跟踪线程 */
+    OUTPUT,     /* 输出线程 */
+    GRPC,       /* gRPC 线程 */
+    _COUNT
+};
+
+static constexpr int THREAD_WATCHDOG_TIMEOUT_MS = 5000;  /* 5秒无心跳 → 异常 */
+static constexpr int THREAD_WATCHDOG_CHECK_MS   = 100;   /* 100ms 检查间隔 */
+
+static std::atomic<int64_t> g_thread_heartbeats[static_cast<int>(ThreadRole::_COUNT)];
+static const char *g_thread_names[] = {"Capture", "Inference", "Tracking", "Output", "gRPC"};
+
+static void thread_heartbeat(ThreadRole role) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    g_thread_heartbeats[static_cast<int>(role)].store(
+        ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL,
+        std::memory_order_release);
+}
+
+static int64_t get_time_ms() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
+}
+
+/*
+ * check_thread_health — 检查所有线程心跳
+ * 返回: 0 = 全部正常, >0 = 异常线程数
+ * 异常线程名打印到 stderr
+ */
+static int check_thread_health() {
+    int64_t now = get_time_ms();
+    int dead = 0;
+    for (int i = 0; i < static_cast<int>(ThreadRole::_COUNT); i++) {
+        int64_t last = g_thread_heartbeats[i].load(std::memory_order_acquire);
+        /* 未初始化的线程跳过 (如 gRPC 未启用时) */
+        if (last == 0) continue;
+        if (now - last > THREAD_WATCHDOG_TIMEOUT_MS) {
+            fprintf(stderr, "[Watchdog] Thread %s dead! (last heartbeat %lldms ago)\n",
+                    g_thread_names[i], (long long)(now - last));
+            dead++;
+        }
+    }
+    return dead;
+}
 
 /* ── 线程间队列 ────────────────────────────────────────── */
 struct FrameData {
@@ -177,6 +245,7 @@ static void capture_thread_func(const PipelineConfig &cfg,
             return;
         }
         while (g_running.load()) {
+            thread_heartbeat(ThreadRole::CAPTURE);
             FrameData frame;
             frame.index = frame_idx++;
             if (!capture.read_frame(&frame.data, &frame.width,
@@ -200,6 +269,7 @@ static void capture_thread_func(const PipelineConfig &cfg,
             return;
         }
         while (g_running.load()) {
+            thread_heartbeat(ThreadRole::CAPTURE);
             FrameData frame;
             frame.index = frame_idx++;
             frame.capture = nullptr;
@@ -246,6 +316,7 @@ static void inference_thread_func(const PipelineConfig &cfg,
     float perf_sum = 0.0;
 
     while (g_running.load()) {
+        thread_heartbeat(ThreadRole::INFERENCE);
         FrameData frame;
         if (!frame_queue.pop(frame)) {
             usleep(1000);
@@ -356,6 +427,7 @@ static void tracking_thread_func(const PipelineConfig &cfg,
                     cfg.tracking.n_init);
 
     while (g_running.load()) {
+        thread_heartbeat(ThreadRole::TRACKING);
         DetectResult det;
         if (!detect_queue.pop(det)) {
             usleep(1000);
@@ -512,7 +584,35 @@ static void output_thread_func(const PipelineConfig &cfg,
         }
     }
 
+    /* ── 初始化传感器设备 ── */
+    int uart_fd = -1;
+    int spi_fd  = -1;
+    if (cfg.sensor.uart_enabled) {
+        uart_fd = open(cfg.sensor.uart_device.c_str(), O_RDONLY | O_NONBLOCK);
+        if (uart_fd < 0)
+            fprintf(stderr, "[Pipeline] Failed to open UART sensor: %s\n",
+                    cfg.sensor.uart_device.c_str());
+        else
+            printf("[Pipeline] UART sensor opened: %s\n",
+                   cfg.sensor.uart_device.c_str());
+    }
+    if (cfg.sensor.spi_enabled) {
+        spi_fd = open(cfg.sensor.spi_device.c_str(), O_RDONLY | O_NONBLOCK);
+        if (spi_fd < 0)
+            fprintf(stderr, "[Pipeline] Failed to open SPI sensor: %s\n",
+                    cfg.sensor.spi_device.c_str());
+        else
+            printf("[Pipeline] SPI sensor opened: %s\n",
+                   cfg.sensor.spi_device.c_str());
+    }
+
+    /* 传感器数据缓冲 */
+    char uart_buf[128] = {0};
+    char spi_buf[128]  = {0};
+    int sensor_read_counter = 0;
+
     while (g_running.load()) {
+        thread_heartbeat(ThreadRole::OUTPUT);
         /* ── 远程控制: 录制启动/停止 ── */
         if (encoder_initialized) {
             bool want_rec = g_recording_requested.load();
@@ -561,6 +661,34 @@ static void output_thread_func(const PipelineConfig &cfg,
                                 result.frame_index);
         }
 
+        /* ── 传感器数据读取 (每 10 帧, 非阻塞) ── */
+        if (++sensor_read_counter >= 10) {
+            sensor_read_counter = 0;
+            if (uart_fd >= 0) {
+                ssize_t n = read(uart_fd, uart_buf, sizeof(uart_buf) - 1);
+                if (n > 0) {
+                    uart_buf[n] = '\0';
+                    /* MQTT 上报传感器数据 */
+                    if (cfg.mqtt.enabled) {
+                        std::string sen_topic = "edge/" + cfg.mqtt.client_id + "/sensor/uart";
+                        mqtt.publish_detections(sen_topic, result.boxes,
+                                                result.frame_index, result.timestamp_us);
+                    }
+                }
+            }
+            if (spi_fd >= 0) {
+                ssize_t n = read(spi_fd, spi_buf, sizeof(spi_buf) - 1);
+                if (n > 0) {
+                    spi_buf[n] = '\0';
+                    if (cfg.mqtt.enabled) {
+                        std::string sen_topic = "edge/" + cfg.mqtt.client_id + "/sensor/spi";
+                        mqtt.publish_detections(sen_topic, result.boxes,
+                                                result.frame_index, result.timestamp_us);
+                    }
+                }
+            }
+        }
+
         /* 视频编码: 将原始帧推入编码器 */
         if (video_encoder.is_recording() && result.frame_data) {
             video_encoder.push_frame(result.frame_data,
@@ -588,6 +716,16 @@ static void output_thread_func(const PipelineConfig &cfg,
     if (rtsp_server.is_running()) {
         rtsp_server.stop();
         printf("[Pipeline] RTSP server stopped\n");
+    }
+
+    /* 关闭传感器设备 */
+    if (uart_fd >= 0) {
+        close(uart_fd);
+        printf("[Pipeline] UART sensor closed\n");
+    }
+    if (spi_fd >= 0) {
+        close(spi_fd);
+        printf("[Pipeline] SPI sensor closed\n");
     }
 
     if (cfg.mqtt.enabled)
@@ -626,6 +764,7 @@ static void grpc_server_thread_func(const PipelineConfig &cfg,
 
     /* gRPC 服务器在主循环中运行, 直到 shutdown */
     while (g_running.load()) {
+        thread_heartbeat(ThreadRole::GRPC);
         sleep(1);
     }
 
@@ -697,7 +836,7 @@ int pipeline_run(const PipelineConfig &cfg)
 
     printf("[Pipeline] All threads started, running...\n"); fflush(stdout);
 
-    /* 主循环: 100ms 轮询 shutdown */
+    /* 主循环: 100ms 轮询 shutdown + 线程健康监控 */
     while (g_running.load()) {
         usleep(100000);  /* 100ms */
 
@@ -705,6 +844,18 @@ int pipeline_run(const PipelineConfig &cfg)
             printf("[Pipeline] Shutdown requested, stopping...\n");
             g_running.store(false);
         }
+
+        /* 线程健康检查: 有线程死亡 → 触发优雅关机 */
+        int dead_threads = check_thread_health();
+        if (dead_threads > 0) {
+            fprintf(stderr, "[Pipeline] %d thread(s) dead, triggering shutdown\n",
+                    dead_threads);
+            g_running.store(false);
+        }
+
+        /* systemd watchdog: 通知 systemd 本服务仍存活
+         * 需在 service unit 中配置 WatchdogSec=10 */
+        sd_notify(0, "WATCHDOG=1");
     }
 
     /* ── 五层逆序释放 ── */

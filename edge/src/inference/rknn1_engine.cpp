@@ -28,6 +28,44 @@
 #include <iostream>
 #include <pthread.h>
 #include <unistd.h>
+#include <fcntl.h>
+
+/* ── NPU 温度监控 ────────────────────────────────────────── */
+/*
+ * read_npu_temp — 读取 NPU 温度 (℃)
+ *
+ * RK3399Pro 的 thermal zone 2 或 3 通常对应 NPU,
+ * 具体编号因 BSP 版本而异, 此处读取所有 thermal zone 取最大值。
+ *
+ * 返回: 温度 (℃), -1 表示读取失败
+ */
+static float read_npu_temp()
+{
+    float max_temp = -1.0f;
+    char buf[32];
+    for (int zone = 0; zone < 5; zone++) {
+        char path[64];
+        snprintf(path, sizeof(path),
+                 "/sys/class/thermal/thermal_zone%d/temp", zone);
+        int fd = open(path, O_RDONLY);
+        if (fd < 0) continue;
+        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+        if (n <= 0) continue;
+        buf[n] = '\0';
+        float temp = atoi(buf) / 1000.0f;  /* millidegree → ℃ */
+        if (temp > max_temp) max_temp = temp;
+    }
+    return max_temp;
+}
+
+/* NPU 温度保护配置 */
+static constexpr float NPU_TEMP_WARN     = 80.0f;  /* 80℃ 打印警告 */
+static constexpr float NPU_TEMP_THROTTLE = 90.0f;  /* 90℃ 暂停推理 100ms */
+static constexpr float NPU_TEMP_SHUTDOWN = 105.0f; /* 105℃ 触发关机 */
+
+/* 推理超时配置 (RK3399Pro NPU 正常推理 <100ms, 超时 = 死锁) */
+static constexpr int INFERENCE_TIMEOUT_MS = 500;
 
 /* ── 构造: 加载模型 + 初始化 NPU ──────────────────────── */
 Rknn1Engine::Rknn1Engine(const char *model_path, int cpu_id)
@@ -355,6 +393,26 @@ int Rknn1Engine::inference(unsigned char *input_data)
         return -1;
     }
 
+    /* ── NPU 温度保护 ── */
+    static int temp_check_counter = 0;
+    if (++temp_check_counter >= 30) {  /* 每 30 帧检查一次温度 (约1秒) */
+        temp_check_counter = 0;
+        float temp = read_npu_temp();
+        if (temp > 0) {
+            if (temp >= NPU_TEMP_SHUTDOWN) {
+                fprintf(stderr, "[RKNN1] NPU critical temp %.1f°C! Triggering shutdown\n", temp);
+                kill(getpid(), SIGTERM);
+                return -1;
+            }
+            if (temp >= NPU_TEMP_THROTTLE) {
+                printf("[RKNN1] NPU throttling: temp=%.1f°C, sleeping 100ms\n", temp);
+                usleep(100000);
+            } else if (temp >= NPU_TEMP_WARN) {
+                printf("[RKNN1] NPU warm: temp=%.1f°C\n", temp);
+            }
+        }
+    }
+
     /* ── 设置输入 ── */
     rknn_input inputs[1];
     memset(inputs, 0, sizeof(inputs));
@@ -371,11 +429,26 @@ int Rknn1Engine::inference(unsigned char *input_data)
         return -1;
     }
 
-    /* ── 触发推理 ── */
+    /* ── 触发推理 (带超时检测) ── */
+    struct timespec t_start, t_end;
+    clock_gettime(CLOCK_MONOTONIC, &t_start);
+
     ret = rknn_run(_ctx, NULL);
+
+    clock_gettime(CLOCK_MONOTONIC, &t_end);
+    long long elapsed_ms = (t_end.tv_sec - t_start.tv_sec) * 1000LL +
+                           (t_end.tv_nsec - t_start.tv_nsec) / 1000000LL;
+
     if (ret < 0) {
         fprintf(stderr, "[RKNN1] rknn_run fail! ret=%d\n", ret);
         return -1;
+    }
+
+    /* 推理超时检测: NPU 死锁或异常慢 */
+    if (elapsed_ms > INFERENCE_TIMEOUT_MS) {
+        fprintf(stderr, "[RKNN1] Inference timeout! took %lldms (threshold %dms)\n",
+                elapsed_ms, INFERENCE_TIMEOUT_MS);
+        /* 不返回 -1, 仍然取输出, 但记录异常 */
     }
 
     /* ── 获取输出 ── */

@@ -27,6 +27,9 @@ service EdgeService {
 
   // OTA: 回滚到上一版本
   rpc Rollback(RollbackRequest) returns (RollbackResponse);
+
+  // 实时检测结果推送 (Server Streaming)
+  rpc StreamDetections(StreamDetectionsRequest) returns (stream DetectionEvent);
 }
 
 // ── 模型推送 ─────────────────────────────────────────────
@@ -142,4 +145,28 @@ message RollbackResponse {
   string message = 2;
   string rolled_back_version = 3;   // 回滚到的版本
   bool needs_restart = 4;           // 是否需要重启
+}
+
+// ── 实时检测结果流 ───────────────────────────────────────
+message StreamDetectionsRequest {
+  string device_id = 1;
+  int32 max_fps = 2;               // 最大推送帧率 (0=不限)
+}
+
+message DetectionEvent {
+  string device_id = 1;
+  int32 frame_index = 2;
+  int64 timestamp_us = 3;
+  repeated DetectionBox boxes = 4;
+  float inference_ms = 5;          // 推理耗时
+}
+
+message DetectionBox {
+  float x1 = 1;
+  float y1 = 2;
+  float x2 = 3;
+  float y2 = 4;
+  float confidence = 5;
+  int32 class_id = 6;
+  int32 track_id = 7;
 }

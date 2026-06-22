@@ -31,6 +31,9 @@ static void on_connect(struct mosquitto *mosq, void *obj, int rc)
         printf("[MQTT] Connected to broker\n");
         self->_connected = true;
 
+        /* 补发断网期间积压的消息 */
+        self->flush_pending_messages();
+
         /* 订阅指令 topic */
         if (!self->_cmd_topic.empty()) {
             mosquitto_subscribe(mosq, NULL,
@@ -103,6 +106,13 @@ bool MqttPublisher::connect(const std::string &host, int port,
     mosquitto_publish_callback_set(_mosq, on_publish);
     mosquitto_message_callback_set(_mosq, on_message);
 
+    /* ── 自动重连配置 ──
+     * 指数退避: 1s → 2s → 4s → 8s → ... → 最大 300s
+     * mosquitto_loop_start 内部会自动调用 mosquitto_reconnect
+     * 此配置让断线后自动重连, 不需要手动重连逻辑
+     */
+    mosquitto_reconnect_delay_set(_mosq, 1, 300, true);
+
     /* 遗嘱消息: 设备离线时自动发布 */
     std::string will_topic = "edge/" + client_id + "/health";
     std::string will_msg = "{\"status\":\"offline\"}";
@@ -150,7 +160,7 @@ bool MqttPublisher::publish_detections(
     const std::vector<DetectBox> &boxes,
     int frame_index, int64_t timestamp_us)
 {
-    if (!_connected || !_mosq)
+    if (!_mosq)
         return false;
 
     std::ostringstream json;
@@ -176,6 +186,16 @@ bool MqttPublisher::publish_detections(
     json << "]}";
 
     std::string payload = json.str();
+
+    /* 断网时缓冲消息, 重连后补发 */
+    if (!_connected) {
+        std::lock_guard<std::mutex> lock(_pending_mutex);
+        if (_pending_queue.size() < MAX_PENDING) {
+            _pending_queue.push_back({topic, payload, 1});
+        }
+        return false;
+    }
+
     int ret = mosquitto_publish(_mosq, NULL, topic.c_str(),
                                 payload.size(), payload.c_str(), 1, false);
     if (ret != MOSQ_ERR_SUCCESS) {
@@ -190,7 +210,7 @@ bool MqttPublisher::publish_detections(
 bool MqttPublisher::publish_health(const std::string &topic,
                                    int frame_index)
 {
-    if (!_connected || !_mosq)
+    if (!_mosq)
         return false;
 
     std::ostringstream json;
@@ -255,4 +275,35 @@ void MqttPublisher::handle_command(const char *topic,
         /* 重启是特殊指令, 直接发信号 */
         kill(getpid(), SIGTERM);
     }
+}
+
+/* ── 补发积压消息 ──────────────────────────────────────── */
+/*
+ * flush_pending_messages — 重连成功后补发断网期间缓冲的消息
+ *
+ * 只补发检测结果 (QoS 1), 心跳消息丢弃 (已过时)
+ * 缓冲区最多 MAX_PENDING 条, 超出则丢弃最旧消息
+ */
+void MqttPublisher::flush_pending_messages()
+{
+    std::lock_guard<std::mutex> lock(_pending_mutex);
+    if (_pending_queue.empty()) return;
+
+    size_t flushed = 0;
+    while (!_pending_queue.empty()) {
+        const auto &msg = _pending_queue.front();
+        int ret = mosquitto_publish(_mosq, NULL, msg.topic.c_str(),
+                                    msg.payload.size(), msg.payload.c_str(),
+                                    msg.qos, false);
+        if (ret != MOSQ_ERR_SUCCESS) {
+            fprintf(stderr, "[MQTT] Flush pending failed: %s\n",
+                    mosquitto_strerror(ret));
+            break;  /* 发送失败, 停止补发, 保留剩余消息 */
+        }
+        _pending_queue.pop_front();
+        flushed++;
+    }
+    if (flushed > 0)
+        printf("[MQTT] Flushed %zu pending messages (remaining: %zu)\n",
+               flushed, _pending_queue.size());
 }

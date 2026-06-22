@@ -251,6 +251,11 @@ if(EXISTS "${RKNN_INCLUDE_DIR}/rknn_api.h")
     target_link_libraries(edge-ai-camera PRIVATE rknn_api)
 endif()
 
+# 可选: systemd (systemd notify/watchdog)
+if(LIBSYSTEMD_FOUND)
+    target_compile_definitions(edge-ai-camera PRIVATE HAVE_LIBSYSTEMD)
+endif()
+
 # ── 编译选项 ──────────────────────────────────────────────
 target_compile_options(edge-ai-camera PRIVATE
     -Wall -Wextra -Wpedantic

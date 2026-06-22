@@ -106,6 +106,14 @@ struct SystemConfig {
     int log_rotation_days = 7;
 };
 
+/* ── 传感器配置 ──────────────────────────────────────────── */
+struct SensorConfig {
+    bool uart_enabled = false;          /* 是否启用 UART 传感器 */
+    std::string uart_device = "/dev/uart_sensor";
+    bool spi_enabled = false;           /* 是否启用 SPI 传感器 */
+    std::string spi_device = "/dev/spi_sensor";
+};
+
 /* ── 场景配置 (多场景切换) ─────────────────────────────── */
 struct SceneConfig {
     std::string name;           /* 场景名称: face/body/vehicle/defect */
@@ -127,6 +135,7 @@ struct PipelineConfig {
     MqttConfig mqtt;
     GrpcConfig grpc;
     SystemConfig system;
+    SensorConfig sensor;
 
     /* 多场景支持 */
     std::vector<SceneConfig> scenes;

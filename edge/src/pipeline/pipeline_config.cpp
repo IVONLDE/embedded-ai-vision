@@ -170,6 +170,19 @@ PipelineConfig PipelineConfig::load_from_yaml(const std::string &yaml_path)
                 cfg.system.log_rotation_days = sys["log_rotation_days"].as<int>();
         }
 
+        /* ── 传感器配置 ── */
+        if (root["sensor"]) {
+            auto sen = root["sensor"];
+            if (sen["uart_enabled"])
+                cfg.sensor.uart_enabled = sen["uart_enabled"].as<bool>();
+            if (sen["uart_device"])
+                cfg.sensor.uart_device = sen["uart_device"].as<std::string>();
+            if (sen["spi_enabled"])
+                cfg.sensor.spi_enabled = sen["spi_enabled"].as<bool>();
+            if (sen["spi_device"])
+                cfg.sensor.spi_device = sen["spi_device"].as<std::string>();
+        }
+
         /* ── 多场景配置 ── */
         if (root["scenes"] && root["scenes"].IsSequence()) {
             for (const auto &s : root["scenes"]) {

@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <deque>
+#include <mutex>
 #include "detect_box.h"
 
 class MqttPublisher {
@@ -55,6 +57,17 @@ public:
     int _last_published_mid = 0;
 
     CommandCallback _cmd_callback;
+
+    /* 离线消息缓冲: 断网时暂存, 重连后补发 */
+    struct PendingMsg {
+        std::string topic;
+        std::string payload;
+        int qos;
+    };
+    std::deque<PendingMsg> _pending_queue;
+    std::mutex _pending_mutex;
+    static constexpr size_t MAX_PENDING = 100;  /* 最多缓冲100条消息 */
+    void flush_pending_messages();
 };
 
 #endif /* MQTT_PUBLISHER_H */

@@ -65,6 +65,7 @@ private:
 
     Rknn1Engine *_engine;
     const PipelineConfig *_config;
+    time_t _start_time;     /* 服务启动时间 (计算 uptime) */
 
     /* OTA 指令回调 */
     OtaCallback _ota_callback;

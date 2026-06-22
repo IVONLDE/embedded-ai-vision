@@ -27,6 +27,7 @@
 #include <sstream>
 #include <thread>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 #include <signal.h>
 #include <openssl/sha.h>
@@ -364,14 +365,64 @@ Status GrpcServer::EdgeServiceImpl::GetStatus(
     response->set_device_id(cfg ? cfg->device_id : "");
     response->set_scene(cfg ? cfg->active_scene : "");
     response->set_model_version(cfg ? cfg->inference.model_path : "");
-    response->set_fps(0.0f);
-    response->set_npu_usage(0.0f);
-    response->set_cpu_temp(0.0f);
-    response->set_memory_bytes(0);
-    response->set_uptime_sec(0);
-    response->set_frame_count(0);
-    response->set_avg_inference_ms(0.0f);
-    response->set_app_version("1.0.0");
+
+    /* ── 读取真实硬件指标 ── */
+
+    /* NPU/CPU 温度: 遍历所有 thermal zone 取最大值 */
+    float max_temp = -1.0f;
+    for (int zone = 0; zone < 5; zone++) {
+        char path[64];
+        snprintf(path, sizeof(path),
+                 "/sys/class/thermal/thermal_zone%d/temp", zone);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        int millideg;
+        if (fscanf(f, "%d", &millideg) == 1) {
+            float t = millideg / 1000.0f;
+            if (t > max_temp) max_temp = t;
+        }
+        fclose(f);
+    }
+    response->set_cpu_temp(max_temp > 0 ? max_temp : 0.0f);
+
+    /* 内存使用: /proc/meminfo */
+    long mem_total = 0, mem_available = 0;
+    {
+        FILE *f = fopen("/proc/meminfo", "r");
+        if (f) {
+            char line[128];
+            while (fgets(line, sizeof(line), f)) {
+                if (strncmp(line, "MemTotal:", 9) == 0)
+                    sscanf(line + 9, "%ld", &mem_total);
+                else if (strncmp(line, "MemAvailable:", 13) == 0)
+                    sscanf(line + 13, "%ld", &mem_available);
+            }
+            fclose(f);
+        }
+    }
+    if (mem_total > 0) {
+        response->set_memory_bytes(
+            (mem_total - mem_available) * 1024L);
+    }
+
+    /* 磁盘空间: statvfs */
+    {
+        struct statvfs vfs;
+        if (statvfs("/data", &vfs) == 0 || statvfs("/", &vfs) == 0) {
+            /* 记录到日志, 可后续扩展到 response 字段 */
+            long long free_mb = (long long)vfs.f_bfree * vfs.f_frsize / (1024 * 1024);
+            if (free_mb < 100) {
+                fprintf(stderr, "[gRPC] WARNING: disk free only %lldMB\n", free_mb);
+            }
+        }
+    }
+
+    /* 运行时长 */
+    response->set_uptime_sec(
+        (long)(time(nullptr) - _owner->_start_time));
+
+    /* 应用版本 */
+    response->set_app_version("1.3.0");
 
     return Status::OK;
 }
@@ -513,7 +564,7 @@ Status GrpcServer::EdgeServiceImpl::Rollback(
  * ══════════════════════════════════════════════════════════ */
 
 GrpcServer::GrpcServer()
-    : _running(false), _engine(nullptr), _config(nullptr)
+    : _running(false), _engine(nullptr), _config(nullptr), _start_time(time(nullptr))
 {
 }
 

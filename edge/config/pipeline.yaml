@@ -81,6 +81,13 @@ system:
   log_path: "/var/log/edge-ai/"
   log_rotation_days: 7
 
+# ── 传感器 ──────────────────────────────────────────────────
+sensor:
+  uart_enabled: false            # 启用 UART 传感器 (需驱动已加载)
+  uart_device: "/dev/uart_sensor"
+  spi_enabled: false             # 启用 SPI 传感器 (需驱动已加载)
+  spi_device: "/dev/spi_sensor"
+
 # ── 多场景配置 ────────────────────────────────────────────
 scenes:
   - name: "face"
