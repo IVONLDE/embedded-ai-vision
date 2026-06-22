@@ -7,6 +7,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- 线程健康监控 + systemd 看门狗 (`edge/src/pipeline/pipeline.cpp`, +85行)
+  - 5个工作线程各自原子心跳 (clock_gettime MONOTONIC)
+  - 主循环100ms检查, 5秒超时判定线程死亡 → 触发优雅关机
+  - sd_notify(WATCHDOG=1) 集成 systemd WatchdogSec=30
+- NPU 过热保护 + 推理超时检测 (`edge/src/inference/rknn1_engine.cpp`, +75行)
+  - 每30帧读取 /sys/class/thermal/thermal_zone*/temp
+  - 三级保护: 80°C警告 → 90°C降频(usleep 100ms) → 105°C关机(SIGTERM)
+  - 推理超时: clock_gettime 记录 rknn_run 耗时, >500ms告警
+- 传感器数据消费层 (`edge/src/pipeline/pipeline.cpp`, +60行)
+  - pipeline_config: 新增 SensorConfig (uart/spi enabled + device path)
+  - 输出线程: O_NONBLOCK 打开 /dev/uart_sensor + /dev/spi_sensor
+  - 每10帧非阻塞读取传感器数据, 附加到MQTT上报
+- MQTT 自动重连 + 离线消息缓冲 (`edge/src/comm/mqtt_publisher.cpp`, +55行)
+  - mosquitto_reconnect_delay_set 指数退避 (1s → 300s)
+  - 断网时消息缓冲到 deque<PendingMsg> (最多100条)
+  - 重连成功后自动 flush_pending_messages() 补发
+- gRPC Server Streaming 实时检测结果推送 (`edge/proto/edge_service.proto`, +27行)
+  - 新增 StreamDetections RPC (server streaming)
+  - 新增 DetectionEvent/DetectionBox message 类型
+- GetStatus 填充真实硬件指标 (`edge/src/comm/grpc_server.cpp`, +60行)
+  - CPU/NPU温度: 读取 /sys/class/thermal/thermal_zone*/temp
+  - 内存: 解析 /proc/meminfo (MemTotal/MemAvailable)
+  - 磁盘: statvfs(/data) 检查剩余空间, <100MB警告
+  - uptime: time(nullptr) - _start_time
 - GStreamer H.264/H.265 硬件视频编码器 (`edge/src/io/video_encoder.cpp`, 388行)
   - 基于 Rockchip MPP (mpph264enc/mpph265enc) 硬件编码
   - 支持动态码率调整 + 关键帧请求 + 录制启停

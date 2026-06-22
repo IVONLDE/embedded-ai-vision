@@ -213,8 +213,13 @@ embedded-ai-vision/
 | **RKNN1 API** | NPU 推理 (rknn_init/run/inputs_set/outputs_get) | `edge/src/inference/` |
 | **SORT 跟踪** | 卡尔曼滤波 + 匈牙利匹配 (纯CPU, 单核NPU适配) | `edge/src/inference/deepsort/` |
 | **V4L2 DMA-BUF** | 摄像头→NPU 零拷贝采集 (mmap / VIDIOC_EXPBUF) | `edge/src/io/` |
-| **MQTT** | 检测结果 + 心跳上报 + 远程控制 (libmosquitto / QoS 0/1 / 命令下发) | `edge/src/comm/` |
-| **gRPC** | 模型推送 / 场景切换 / OTA升级 / 远程管控 (8 RPC, Proto3) | `edge/src/comm/` + `edge/proto/` |
+| **帧数据传递** | 推理→跟踪→输出线程所有权转移 (避免 V4L2 缓冲区提前释放) | `edge/src/pipeline/pipeline.cpp` |
+| **线程看门狗** | 5线程原子心跳 + 5秒超时检测 + systemd watchdog 集成 | `edge/src/pipeline/pipeline.cpp` |
+| **NPU 温度保护** | thermal_zone 读取, 80°C警告/90°C降频/105°C关机 + 推理500ms超时检测 | `edge/src/inference/rknn1_engine.cpp` |
+| **传感器消费层** | UART/SPI 字符设备 O_NONBLOCK 读取 + MQTT 上报 | `edge/src/pipeline/pipeline.cpp` |
+| **MQTT** | 检测结果 + 心跳上报 + 远程控制 + 自动重连(指数退避1s→300s) + 离线缓冲100条 | `edge/src/comm/` |
+| **gRPC** | 模型推送 / 场景切换 / OTA升级 / 流式检测推送 (9 RPC, Proto3) | `edge/src/comm/` + `edge/proto/` |
+| **GetStatus 硬件指标** | thermal_zone/meminfo/statvfs 填充温度/内存/磁盘/uptime | `edge/src/comm/grpc_server.cpp` |
 | **systemd** | 服务托管 (Type=notify / cgroups / 看门狗 / 安全加固) | `edge/config/` |
 | **Buildroot** | 交叉编译 / rootfs 裁剪 / SD 卡镜像 | `buildroot-external/` |
 | **RKNN-Toolkit1** | PyTorch → ONNX → RKNN 导出 + INT8 量化 | `training/scripts/` |
@@ -223,23 +228,48 @@ embedded-ai-vision/
 ## 项目统计
 
 ```
-文件总数:  310+
-代码行数:  65,500+
+文件总数:  320+
+代码行数:  67,500+
 
-C (内核驱动 + GStreamer):         3,700 行  (+750 SPI驱动)
-C++ (推理应用 + 编码推流):         3,500 行  (+614 video_encoder + rtsp_server)
-头文件 (.h):                        820 行   (+150 编码器/RTSP/SPI头文件)
-DTS (设备树):                       480 行   (+17 SPI节点)
-Proto (gRPC/Protobuf):             ~182 行
-─────────────────────────────────────────
-C/C++/DTS/Proto 总计:             ~8,682 行
+板子端 (手写):
+  C++ 推理应用 (.cpp):              5,251 行
+  C++ 头文件 (手写 .h):             1,060 行
+  C 内核驱动 (.c):                  3,080 行  (IMX415/UART/SPI/GPIO/NPU)
+  C 驱动头文件 (.h):                  286 行
+  GStreamer 插件 (.c):              1,522 行  (rknninference/rknndraw)
+  设备树 (DTS):                       474 行
+  Proto (gRPC/Protobuf):              207 行
+  ─────────────────────────────────────────
+  板子端总计:                     ~11,880 行
 
-Python (PC 端管理平台):         ~40,000 行
-QML (GUI):                       ~3,030 行
-Shell (构建/部署脚本):           ~600 行
-配置 (Buildroot/systemd/YAML):  ~820 行
-文档:                            ~350 行
+PC 端:
+  Python (管理平台):              ~45,000 行
+  QML (GUI):                      ~12,288 行
+
+其他:
+  Shell (构建/部署脚本):             ~600 行
+  配置 (Buildroot/systemd/YAML):    ~820 行
+  文档:                             ~400 行
 ```
+
+### 板子端模块代码量分布
+
+| 模块 | 行数 | 关键文件 |
+|------|------|---------|
+| Pipeline 调度器 | 899 | pipeline.cpp (4线程流水线+看门狗+帧传递) |
+| gRPC 服务 | 660 | grpc_server.cpp (9 RPC + 真实指标) |
+| NPU 推理引擎 | 580 | rknn1_engine.cpp (热加载+温度保护+超时) |
+| OTA 管理 | 532 | ota_manager.cpp (SHA256+原子替换+回滚) |
+| GStreamer 编码 | 387 | video_encoder.cpp (MPP H.264/H.265) |
+| SORT 跟踪 | 348 | tracker.cpp (卡尔曼+匈牙利) |
+| V4L2 采集 | 332 | v4l2_capture.cpp (DMA-BUF 零拷贝) |
+| MQTT 通信 | 309 | mqtt_publisher.cpp (自动重连+消息缓冲) |
+| RTSP 推流 | 237 | rtsp_server.cpp (gst-rtsp-server) |
+| SPI 驱动 | 772 | spi_sensor.c (spi_sync 全双工) |
+| IMX415 驱动 | 714 | imx415_v4l2.c (V4L2 sub-device) |
+| UART 驱动 | 649 | uart_sensor.c (serdev+环形缓冲) |
+| GPIO 驱动 | 546 | gpio_trigger.c (中断+tasklet) |
+| NPU 驱动 | 399 | rknpu_drv.c (misc+wait_queue) |
 
 ## 快速开始
 
