@@ -153,10 +153,9 @@ int Rknn1Engine::load_model(const char *model_path)
     }
 
     /* RKNN1 API: rknn_init
-     * 使用 RKNN_FLAG_COLLECT_PERF_MASK 开启性能统计
-     * 需要 API 1.7.5 + DRV 1.7.5 匹配，否则会报 TOO_MANY_CLIENT */
-    ret = rknn_init(&_ctx, model_data, model_len,
-                    RKNN_FLAG_COLLECT_PERF_MASK, NULL);
+     * 不传 flag: 避免 TOO_MANY_CLIENT 错误
+     * (RKNN_FLAG_COLLECT_PERF_MASK 某些 DRV 版本不支持) */
+    ret = rknn_init(&_ctx, model_data, model_len, 0, NULL);
     free(model_data);
 
     if (ret < 0) {
@@ -270,9 +269,8 @@ int Rknn1Engine::hot_reload_model(const char *new_model_path)
         return -1;
     }
 
-    /* 初始化新 context (热加载也开启性能统计) */
-    ret = rknn_init(&new_ctx, model_data, model_len,
-                    RKNN_FLAG_COLLECT_PERF_MASK, NULL);
+    /* 初始化新 context */
+    ret = rknn_init(&new_ctx, model_data, model_len, 0, NULL);
     free(model_data);
 
     if (ret < 0) {
