@@ -361,7 +361,7 @@ Rectangle {
                                 }
                             }
 
-                            // 操作按钮
+                            // 操作按钮 — 常用操作直接显示，其余收入"更多"菜单
                             RowLayout {
                                 spacing: 4
 
@@ -386,15 +386,6 @@ Rectangle {
                                     }
                                 }
                                 Button {
-                                    text: "停止录制"
-                                    font.pixelSize: 11
-                                    onClicked: {
-                                        var result = backendService.stopDeviceRecording(model.device_id)
-                                        otaStatusText.text = result.message || "停止录制命令已发送"
-                                        otaStatusText.color = result.status === "success" ? root.successColor : root.dangerColor
-                                    }
-                                }
-                                Button {
                                     text: "RTSP"
                                     font.pixelSize: 11
                                     highlighted: true
@@ -404,31 +395,15 @@ Rectangle {
                                         otaStatusText.color = result.status === "success" ? root.successColor : root.dangerColor
                                     }
                                 }
+
+                                // "更多"下拉菜单 — 管理操作
                                 Button {
-                                    text: "回滚"
+                                    text: "更多 ▾"
                                     font.pixelSize: 11
                                     onClicked: {
-                                        var result = backendService.rollbackDevice(model.device_id, "model")
-                                        otaStatusText.text = result.message || "回滚完成"
-                                        refreshDevices()
-                                    }
-                                }
-                                Button {
-                                    text: "重启"
-                                    font.pixelSize: 11
-                                    onClicked: {
-                                        var result = backendService.restartDevice(model.device_id)
-                                        otaStatusText.text = "设备重启中..."
-                                        refreshDevices()
-                                    }
-                                }
-                                Button {
-                                    text: "删除"
-                                    font.pixelSize: 11
-                                    onClicked: {
-                                        deleteConfirmDialog.targetDeviceId = model.device_id
-                                        deleteConfirmDialog.targetDeviceName = model.name || model.device_id
-                                        deleteConfirmDialog.open()
+                                        moreMenu.targetDeviceId = model.device_id
+                                        moreMenu.targetDeviceName = model.name || model.device_id
+                                        moreMenu.popup()
                                     }
                                 }
                             }
@@ -1094,6 +1069,50 @@ Rectangle {
                         deployDialog.close()
                     }
                 }
+            }
+        }
+    }
+
+    // ── "更多"操作菜单 ───────────────────────────────────
+    Menu {
+        id: moreMenu
+
+        property string targetDeviceId: ""
+        property string targetDeviceName: ""
+
+        MenuItem {
+            text: "停止录制"
+            onTriggered: {
+                var result = backendService.stopDeviceRecording(moreMenu.targetDeviceId)
+                otaStatusText.text = result.message || "停止录制命令已发送"
+                otaStatusText.color = result.status === "success" ? root.successColor : root.dangerColor
+            }
+        }
+        MenuItem {
+            text: "回滚模型"
+            onTriggered: {
+                var result = backendService.rollbackDevice(moreMenu.targetDeviceId, "model")
+                otaStatusText.text = result.message || "回滚完成"
+                otaStatusText.color = result.status === "success" ? root.successColor : root.dangerColor
+                refreshDevices()
+            }
+        }
+        MenuItem {
+            text: "重启设备"
+            onTriggered: {
+                var result = backendService.restartDevice(moreMenu.targetDeviceId)
+                otaStatusText.text = "设备重启中..."
+                otaStatusText.color = root.textMuted
+                refreshDevices()
+            }
+        }
+        MenuSeparator { }
+        MenuItem {
+            text: "删除设备"
+            onTriggered: {
+                deleteConfirmDialog.targetDeviceId = moreMenu.targetDeviceId
+                deleteConfirmDialog.targetDeviceName = moreMenu.targetDeviceName
+                deleteConfirmDialog.open()
             }
         }
     }
