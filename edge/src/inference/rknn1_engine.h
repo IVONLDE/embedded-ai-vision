@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include <stdexcept>
+#include <mutex>  /* 保护 _ctx 热加载原子性 */
 
 /* RKNN 最大输出层数 (YOLOv5=3, 分类模型=1, 更多层模型可用更大值) */
 #define RKNN_MAX_OUTPUTS 8
@@ -78,6 +79,8 @@ public:
 
     std::string _model_path;
     bool _model_loaded;
+
+    std::mutex _ctx_mutex;  /* 保护 _ctx 热加载原子性: inference 与 hot_reload 互斥 */
 
 private:
     int load_model(const char *model_path);

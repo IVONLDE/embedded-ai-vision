@@ -344,24 +344,28 @@ int Rknn1Engine::hot_reload_model(const char *new_model_path)
         }
     }
 
-    /* 原子替换 */
-    rknn_context old_ctx = _ctx;
-    _ctx = new_ctx;
-    _model_path = new_model_path;
+    /* 原子替换 (加锁保护, 与 inference() 互斥) */
+    {
+        std::lock_guard<std::mutex> lock(_ctx_mutex);
 
-    /* 更新输入/输出属性 + 输出层数 */
-    memcpy(&_input_attrs[0], &new_input_attrs, sizeof(rknn_tensor_attr));
-    memcpy(_output_attrs, new_output_attrs, sizeof(new_output_attrs));
-    _n_output = new_n_output;
+        rknn_context old_ctx = _ctx;
+        _ctx = new_ctx;
+        _model_path = new_model_path;
 
-    /* 清除旧输出缓存 (新模型输出尺寸可能不同) */
-    for (int i = 0; i < RKNN_MAX_OUTPUTS; i++) {
-        _output_buffs[i] = nullptr;
-        _output_copies[i].clear();
-    }
+        /* 更新输入/输出属性 + 输出层数 */
+        memcpy(&_input_attrs[0], &new_input_attrs, sizeof(rknn_tensor_attr));
+        memcpy(_output_attrs, new_output_attrs, sizeof(new_output_attrs));
+        _n_output = new_n_output;
 
-    /* 释放旧 context */
-    rknn_destroy(old_ctx);
+        /* 清除旧输出缓存 (新模型输出尺寸可能不同) */
+        for (int i = 0; i < RKNN_MAX_OUTPUTS; i++) {
+            _output_buffs[i] = nullptr;
+            _output_copies[i].clear();
+        }
+
+        /* 释放旧 context */
+        rknn_destroy(old_ctx);
+    }  /* 锁释放 */
 
     printf("[RKNN1] Hot-reload complete (n_output=%d)\n", _n_output);
     return 0;
@@ -384,6 +388,8 @@ int Rknn1Engine::hot_reload_model(const char *new_model_path)
  */
 int Rknn1Engine::inference(unsigned char *input_data)
 {
+    std::lock_guard<std::mutex> lock(_ctx_mutex);  /* 保护热加载原子性 */
+
     int ret;
 
     if (!_model_loaded || !_ctx) {

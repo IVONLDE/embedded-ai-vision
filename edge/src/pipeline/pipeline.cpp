@@ -131,8 +131,9 @@ struct DetectResult {
     std::vector<DetectBox> boxes;  /* 检测框列表 */
     int64_t timestamp_us;
 
-    /* 原始帧数据 (从 FrameData 复制), 传递给跟踪线程 */
-    unsigned char *frame_data = nullptr;
+    /* 原始帧数据 (从 FrameData 复制), 传递给跟踪线程
+     * unique_ptr 自动管理生命周期，任何路径退出均无泄漏 */
+    std::unique_ptr<unsigned char[]> frame_data;
     int frame_width = 0;
     int frame_height = 0;
 };
@@ -143,18 +144,17 @@ struct TrackResult {
     int64_t timestamp_us;
 
     /* 原始帧数据 (RGB24, W×H×3), 用于视频编码和 RTSP 推流
-     * 由推理线程分配, 输出线程消费后释放
-     * nullptr 表示该帧无图像数据 (隔帧检测跳过的帧) */
-    unsigned char *frame_data = nullptr;
+     * unique_ptr 自动管理生命周期，nullptr 表示无图像数据 */
+    std::unique_ptr<unsigned char[]> frame_data;
     int frame_width = 0;
     int frame_height = 0;
 };
 
-/* 线程间队列 (条件变量实现, 避免忙等自旋) */
+/* 线程安全队列 (mutex + condition_variable, 支持阻塞等待与优雅 shutdown) */
 template<typename T>
-class SpscQueue {
+class ThreadSafeQueue {
 public:
-    explicit SpscQueue(int max_size) : _max_size(max_size) {}
+    explicit ThreadSafeQueue(int max_size) : _max_size(max_size) {}
 
     bool push(const T &item) {
         std::unique_lock<std::mutex> lock(_mutex);
@@ -166,6 +166,15 @@ public:
         return true;
     }
 
+    void push_or_wait(const T &item) {
+        std::unique_lock<std::mutex> lock(_mutex);
+        _not_full.wait(lock, [this]{ return _queue.size() < (size_t)_max_size || _shutdown; });
+        if (_shutdown) return;
+        _queue.push(item);
+        lock.unlock();
+        _cond.notify_one();
+    }
+
     bool pop(T &item) {
         std::unique_lock<std::mutex> lock(_mutex);
         _cond.wait(lock, [this]{ return !_queue.empty() || _shutdown; });
@@ -174,7 +183,7 @@ public:
         item = _queue.front();
         _queue.pop();
         lock.unlock();
-        _cond.notify_one();
+        _not_full.notify_one();
         return true;
     }
 
@@ -182,6 +191,7 @@ public:
         std::lock_guard<std::mutex> lock(_mutex);
         _shutdown = true;
         _cond.notify_all();
+        _not_full.notify_all();
     }
 
     size_t size() {
@@ -194,6 +204,7 @@ private:
     int _max_size;
     std::mutex _mutex;
     std::condition_variable _cond;
+    std::condition_variable _not_full;  /* 队列满时生产者等待 */
     bool _shutdown = false;
 };
 
@@ -222,7 +233,7 @@ static void signal_handler(int sig)
  * 背压: 队列满时阻塞等待 (不丢帧)
  */
 static void capture_thread_func(const PipelineConfig &cfg,
-                                SpscQueue<FrameData> &frame_queue)
+                                ThreadSafeQueue<FrameData> &frame_queue)
 {
     printf("[Pipeline] Capture thread started on CPU %d, input type=%d\n",
            cfg.system.cpu_read, (int)cfg.input.type);
@@ -254,8 +265,7 @@ static void capture_thread_func(const PipelineConfig &cfg,
                 continue;
             }
             frame.capture = &capture;
-            while (g_running.load() && !frame_queue.push(frame))
-                usleep(1000);
+            frame_queue.push_or_wait(frame);
         }
         capture.close();
     } else {
@@ -279,8 +289,7 @@ static void capture_thread_func(const PipelineConfig &cfg,
                 if (frame.data) delete[] frame.data;
                 break;
             }
-            while (g_running.load() && !frame_queue.push(frame))
-                usleep(1000);
+            frame_queue.push_or_wait(frame);
         }
         file_input.close();
     }
@@ -296,8 +305,8 @@ static void capture_thread_func(const PipelineConfig &cfg,
  * 背压: 队列满时丢弃非关键帧 (保证实时性)
  */
 static void inference_thread_func(const PipelineConfig &cfg,
-                                  SpscQueue<FrameData> &frame_queue,
-                                  SpscQueue<DetectResult> &detect_queue,
+                                  ThreadSafeQueue<FrameData> &frame_queue,
+                                  ThreadSafeQueue<DetectResult> &detect_queue,
                                   Rknn1Engine *shared_engine)
 {
     printf("[Pipeline] Inference thread started on CPU %d\n",
@@ -349,17 +358,13 @@ static void inference_thread_func(const PipelineConfig &cfg,
         /* 复制帧数据用于编码/推流 (必须在归还 V4L2 缓冲区之前)
          * 编码器始终初始化 (支持远程 MQTT 命令随时启动录制/RTSP),
          * 因此帧数据始终需要复制, 否则远程启动录制后推帧会收到 nullptr
-         * RGB24: width × height × 3 字节 */
-        unsigned char *frame_copy = nullptr;
+         * RGB24: width × height × 3 字节
+         * unique_ptr 管理: 任何路径退出均自动释放, 无内存泄漏 */
+        std::unique_ptr<unsigned char[]> frame_copy;
         {
             size_t frame_size = (size_t)frame.width * frame.height * 3;
-            frame_copy = new(std::nothrow) unsigned char[frame_size];
-            if (frame_copy) {
-                memcpy(frame_copy, frame.data, frame_size);
-            } else {
-                fprintf(stderr, "[Pipeline] Frame copy alloc failed (%zu bytes)\n",
-                        frame_size);
-            }
+            frame_copy = std::make_unique<unsigned char[]>(frame_size);
+            memcpy(frame_copy.get(), frame.data, frame_size);
         }
 
         /* 归还缓冲区 */
@@ -377,7 +382,7 @@ static void inference_thread_func(const PipelineConfig &cfg,
         DetectResult result;
         result.frame_index = frame.index;
         result.timestamp_us = frame.timestamp_us;
-        result.frame_data = frame_copy;
+        result.frame_data = std::move(frame_copy);
         result.frame_width = frame.width;
         result.frame_height = frame.height;
 
@@ -410,8 +415,8 @@ static void inference_thread_func(const PipelineConfig &cfg,
  * 背压: 队列满时跳过当前帧, 卡尔曼预测兜底
  */
 static void tracking_thread_func(const PipelineConfig &cfg,
-                                 SpscQueue<DetectResult> &detect_queue,
-                                 SpscQueue<TrackResult> &track_queue)
+                                 ThreadSafeQueue<DetectResult> &detect_queue,
+                                 ThreadSafeQueue<TrackResult> &track_queue)
 {
     printf("[Pipeline] Tracking thread started on CPU %d\n",
            cfg.system.cpu_tracking);
@@ -438,11 +443,10 @@ static void tracking_thread_func(const PipelineConfig &cfg,
         TrackResult result;
         result.frame_index = det.frame_index;
         result.timestamp_us = det.timestamp_us;
-        /* 传递帧数据 (所有权转移: DetectResult → TrackResult) */
-        result.frame_data = det.frame_data;
+        /* 传递帧数据 (所有权转移: DetectResult → TrackResult, unique_ptr 自动管理) */
+        result.frame_data = std::move(det.frame_data);
         result.frame_width = det.frame_width;
         result.frame_height = det.frame_height;
-        det.frame_data = nullptr;  /* 防止双重释放 */
 
         if (cfg.tracking.enabled && !det.boxes.empty()) {
             tracker.predict();
@@ -479,7 +483,7 @@ static void tracking_thread_func(const PipelineConfig &cfg,
  * 背压: 队列满时本地缓存 (断网不丢数据)
  */
 static void output_thread_func(const PipelineConfig &cfg,
-                               SpscQueue<TrackResult> &track_queue)
+                               ThreadSafeQueue<TrackResult> &track_queue)
 {
     printf("[Pipeline] Output thread started on CPU %d\n",
            cfg.system.cpu_output);
@@ -691,21 +695,17 @@ static void output_thread_func(const PipelineConfig &cfg,
 
         /* 视频编码: 将原始帧推入编码器 */
         if (video_encoder.is_recording() && result.frame_data) {
-            video_encoder.push_frame(result.frame_data,
+            video_encoder.push_frame(result.frame_data.get(),
                                      result.timestamp_us);
         }
 
         /* RTSP 推流: 将原始帧推入 RTSP 服务器 */
         if (rtsp_server.is_running() && result.frame_data) {
-            rtsp_server.push_frame(result.frame_data,
+            rtsp_server.push_frame(result.frame_data.get(),
                                    result.timestamp_us);
         }
 
-        /* 释放帧数据 (所有权由输出线程负责) */
-        if (result.frame_data) {
-            delete[] result.frame_data;
-            result.frame_data = nullptr;
-        }
+        /* 帧数据由 unique_ptr 自动释放, 无需手动 delete[] */
     }
 
     /* 停止编码和推流 */
@@ -802,9 +802,9 @@ int pipeline_run(const PipelineConfig &cfg)
 
     /* 创建队列 */
     int qsize = cfg.system.queue_max_size;
-    SpscQueue<FrameData> frame_queue(qsize);
-    SpscQueue<DetectResult> detect_queue(qsize);
-    SpscQueue<TrackResult> track_queue(qsize);
+    ThreadSafeQueue<FrameData> frame_queue(qsize);
+    ThreadSafeQueue<DetectResult> detect_queue(qsize);
+    ThreadSafeQueue<TrackResult> track_queue(qsize);
 
     /* 初始化 NPU 引擎 (主线程初始化, gRPC 线程共享) */
     printf("[Pipeline] Creating RKNN engine...\n"); fflush(stdout);
