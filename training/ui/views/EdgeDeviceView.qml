@@ -284,14 +284,12 @@ Rectangle {
 
                     delegate: Rectangle {
                         width: deviceListView.width
-                        height: 72
+                        height: 90
                         color: model.device_id === liveData.selectedDeviceId ? Qt.rgba(0.11, 0.31, 0.85, 0.08) : root.bgDark
                         border.color: model.device_id === liveData.selectedDeviceId ? root.primaryColor : root.borderColor
                         border.width: model.device_id === liveData.selectedDeviceId ? 2 : 1
                         radius: 6
 
-                        // MouseArea 放在按钮 RowLayout 之前声明，
-                        // 这样按钮的 Z 顺序更高，点击事件不会被 MouseArea 拦截
                         MouseArea {
                             anchors.fill: parent
                             hoverEnabled: true
@@ -309,7 +307,6 @@ Rectangle {
                                 detailPanel.deviceFps = model.fps || 0
                                 detailPanel.deviceNpu = model.npu_usage || 0
                                 detailPanel.deviceCpuTemp = model.cpu_temp || 0
-                                // 重置实时数据
                                 liveData.liveFrameIndex = 0
                                 liveData.liveDetectionCount = 0
                                 liveData.detectionHistory = []
@@ -318,51 +315,64 @@ Rectangle {
                             }
                         }
 
-                        RowLayout {
+                        ColumnLayout {
                             anchors.fill: parent
-                            anchors.margins: 12
-                            spacing: 12
+                            anchors.margins: 10
+                            spacing: 6
 
-                            // 在线状态指示灯 (脉冲动画)
-                            Rectangle {
-                                width: 12; height: 12; radius: 6
-                                color: model.status === "online" ? root.successColor :
-                                       model.status === "restarting" ? "#FF9800" : "#9E9E9E"
-
-                                // 在线时脉冲动画
-                                SequentialAnimation on opacity {
-                                    running: model.status === "online"
-                                    loops: Animation.Infinite
-                                    NumberAnimation { from: 1.0; to: 0.4; duration: 1000 }
-                                    NumberAnimation { from: 0.4; to: 1.0; duration: 1000 }
-                                }
-                            }
-
-                            ColumnLayout {
+                            // ── 上行: 设备信息 ──
+                            RowLayout {
                                 Layout.fillWidth: true
-                                spacing: 2
+                                spacing: 10
+
+                                // 在线状态指示灯
+                                Rectangle {
+                                    width: 10; height: 10; radius: 5
+                                    color: model.status === "online" ? root.successColor :
+                                           model.status === "restarting" ? "#FF9800" : "#9E9E9E"
+                                    SequentialAnimation on opacity {
+                                        running: model.status === "online"
+                                        loops: Animation.Infinite
+                                        NumberAnimation { from: 1.0; to: 0.4; duration: 1000 }
+                                        NumberAnimation { from: 0.4; to: 1.0; duration: 1000 }
+                                    }
+                                }
 
                                 Text {
                                     text: model.name || model.device_id
-                                    font.pixelSize: 15
+                                    font.pixelSize: 14
                                     font.bold: true
                                     color: root.textColor
+                                    elide: Text.ElideRight
+                                    Layout.maximumWidth: 200
                                 }
+
                                 Text {
-                                    text: model.host + (model.scene ? " | 场景: " + model.scene : "")
+                                    text: model.host
                                     font.pixelSize: 12
                                     color: root.textMuted
                                 }
+
                                 Text {
-                                    text: "模型: " + (model.model_version || "未知") +
-                                          (model.fps > 0 ? " | FPS: " + Math.round(model.fps) : "")
+                                    text: model.scene ? "场景: " + model.scene : ""
                                     font.pixelSize: 12
                                     color: root.textMuted
+                                    visible: model.scene !== ""
                                 }
+
+                                Text {
+                                    text: model.fps > 0 ? "FPS: " + Math.round(model.fps) : ""
+                                    font.pixelSize: 12
+                                    color: root.successColor
+                                    visible: model.fps > 0
+                                }
+
+                                Item { Layout.fillWidth: true }
                             }
 
-                            // 操作按钮 — 常用操作直接显示，其余收入"更多"菜单
+                            // ── 下行: 操作按钮 ──
                             RowLayout {
+                                Layout.fillWidth: true
                                 spacing: 4
 
                                 Button {
@@ -395,8 +405,6 @@ Rectangle {
                                         otaStatusText.color = result.status === "success" ? root.successColor : root.dangerColor
                                     }
                                 }
-
-                                // "更多"下拉菜单 — 管理操作
                                 Button {
                                     text: "更多 ▾"
                                     font.pixelSize: 11
@@ -406,6 +414,8 @@ Rectangle {
                                         moreMenu.popup()
                                     }
                                 }
+
+                                Item { Layout.fillWidth: true }
                             }
                         }
                     }
