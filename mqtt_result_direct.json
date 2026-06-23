@@ -1,0 +1,45 @@
+{
+  "count": 10,
+  "messages": [
+    {
+      "topic": "edge/rk3399pro-edge-001/health",
+      "data": "{\"status\":\"offline\"}"
+    },
+    {
+      "topic": "edge/rk3399pro-edge-001/health",
+      "data": "{\"status\":\"offline\"}"
+    },
+    {
+      "topic": "edge/rk3399pro-edge-001/health",
+      "data": "{\"status\":\"offline\"}"
+    },
+    {
+      "topic": "edge/rk3399pro-edge-001/health",
+      "data": "{\"status\":\"offline\"}"
+    },
+    {
+      "topic": "edge/rk3399pro-edge-001/health",
+      "data": "{\"status\":\"offline\"}"
+    },
+    {
+      "topic": "edge/rk3399pro-edge-001/health",
+      "data": "{\"status\":\"offline\"}"
+    },
+    {
+      "topic": "edge/rk3399pro-edge-001/health",
+      "data": "{\"status\":\"offline\"}"
+    },
+    {
+      "topic": "edge/rk3399pro-edge-001/health",
+      "data": "{\"status\":\"offline\"}"
+    },
+    {
+      "topic": "edge/rk3399pro-edge-001/health",
+      "data": "{\"status\":\"offline\"}"
+    },
+    {
+      "topic": "edge/rk3399pro-edge-001/health",
+      "data": "{\"status\":\"offline\"}"
+    }
+  ]
+}

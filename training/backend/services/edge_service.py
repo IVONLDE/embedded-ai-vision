@@ -44,6 +44,25 @@ class EdgeService:
 
     # ── 设备管理 ─────────────────────────────────────────────
 
+    def _log(self, level: str, message: str, resource_type: str = "edge_device",
+             resource_id: str = None, action: str = None):
+        """记录操作日志的辅助方法"""
+        try:
+            session = self._session_factory()
+            self._log_repo.add(
+                session,
+                level=level,
+                action=action or level,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                message=message,
+            )
+            session.commit()
+        except Exception:
+            pass  # 日志记录失败不影响主流程
+        finally:
+            session.close()
+
     def register_device(self, device_id: str, name: str, host: str,
                         grpc_port: int = 50051, tags: dict = None) -> dict:
         """
@@ -68,10 +87,12 @@ class EdgeService:
                 grpc_port=grpc_port,
                 tags=tags or {},
             )
-            self._log_repo.add("info", f"Edge device registered: {device_id} @ {host}")
+            self._log("info", f"Edge device registered: {device_id} @ {host}",
+                      resource_id=device_id, action="register_device")
             return {"status": "success", "device": self._device_to_dict(device)}
         except Exception as e:
-            self._log_repo.add("error", f"Failed to register device {device_id}: {e}")
+            self._log("error", f"Failed to register device {device_id}: {e}",
+                      resource_id=device_id, action="register_device")
             return {"status": "error", "message": str(e)}
 
     def get_device(self, device_id: str) -> dict:
@@ -111,7 +132,8 @@ class EdgeService:
         """注销设备"""
         success = self._device_repo.delete(device_id)
         if success:
-            self._log_repo.add("info", f"Edge device unregistered: {device_id}")
+            self._log("info", f"Edge device unregistered: {device_id}",
+                      resource_id=device_id, action="unregister_device")
             return {"status": "success"}
         return {"status": "error", "message": "Device not found"}
 
@@ -138,11 +160,13 @@ class EdgeService:
             resp = client.switch_scene(scene)
             if resp.get("status") == 0:
                 self._device_repo.update(device_id, scene=scene)
-                self._log_repo.add("info", f"Scene switched: {device_id} -> {scene}")
+                self._log("info", f"Scene switched: {device_id} -> {scene}",
+                          resource_id=device_id, action="switch_scene")
                 return {"status": "success", "scene": scene}
             return resp
         except Exception as e:
-            self._log_repo.add("error", f"Scene switch failed: {device_id}: {e}")
+            self._log("error", f"Scene switch failed: {device_id}: {e}",
+                      resource_id=device_id, action="switch_scene")
             return {"status": "error", "message": str(e)}
 
     # ── 模型推送 (单设备) ───────────────────────────────────
@@ -203,9 +227,8 @@ class EdgeService:
                             self._model_repo.add_deployed_device(mv.id, device_id)
                             break
 
-                self._log_repo.add(
-                    "info", f"Model pushed: {device_id} ← {model_path}"
-                )
+                self._log("info", f"Model pushed: {device_id} ← {model_path}",
+                          resource_id=device_id, action="push_model")
                 return {
                     "status": "success",
                     "model": model_name,
@@ -213,7 +236,8 @@ class EdgeService:
                 }
             return resp
         except Exception as e:
-            self._log_repo.add("error", f"Model push failed: {device_id}: {e}")
+            self._log("error", f"Model push failed: {device_id}: {e}",
+                      resource_id=device_id, action="push_model")
             return {"status": "error", "message": str(e)}
 
     # ── 批量部署 ────────────────────────────────────────────
@@ -259,10 +283,9 @@ class EdgeService:
             results[device_id] = result
 
         success_count = sum(1 for r in results.values() if r.get("status") == "success")
-        self._log_repo.add(
-            "info",
-            f"Batch deploy completed: {success_count}/{total} devices"
-        )
+        self._log("info",
+                  f"Batch deploy completed: {success_count}/{total} devices",
+                  action="batch_deploy")
 
         return {
             "status": "success" if success_count == total else "partial",
@@ -290,11 +313,13 @@ class EdgeService:
             resp = client.rollback(target)
 
             if resp.get("status") == 0:
-                self._log_repo.add("info", f"Rollback success: {device_id} -> {target}")
+                self._log("info", f"Rollback success: {device_id} -> {target}",
+                          resource_id=device_id, action="rollback")
                 return {"status": "success", "rolled_back": target}
             return resp
         except Exception as e:
-            self._log_repo.add("error", f"Rollback failed: {device_id}: {e}")
+            self._log("error", f"Rollback failed: {device_id}: {e}",
+                      resource_id=device_id, action="rollback")
             return {"status": "error", "message": str(e)}
 
     # ── 重启设备 ────────────────────────────────────────────
@@ -315,7 +340,8 @@ class EdgeService:
             resp = client.restart()
             if resp.get("status") == 0:
                 self._device_repo.update(device_id, status="restarting")
-                self._log_repo.add("info", f"Device restarted: {device_id}")
+                self._log("info", f"Device restarted: {device_id}",
+                          resource_id=device_id, action="restart_device")
             return resp
         except Exception as e:
             return {"status": "error", "message": str(e)}
@@ -342,9 +368,8 @@ class EdgeService:
             device = self._device_repo.get_by_device_id(device_id)
             if not device:
                 # 自动注册新设备 (可选)
-                self._log_repo.add(
-                    "warning", f"Heartbeat from unknown device: {device_id}"
-                )
+                self._log("warning", f"Heartbeat from unknown device: {device_id}",
+                          resource_id=device_id, action="heartbeat_unknown")
                 return {"status": "error", "message": "Unknown device"}
 
             self._device_repo.update(
@@ -362,7 +387,8 @@ class EdgeService:
             )
             return {"status": "success"}
         except Exception as e:
-            self._log_repo.add("error", f"Heartbeat processing failed: {e}")
+            self._log("error", f"Heartbeat processing failed: {e}",
+                      action="heartbeat")
             return {"status": "error", "message": str(e)}
 
     # ── 模型版本管理 ───────────────────────────────────────
@@ -394,7 +420,8 @@ class EdgeService:
             accuracy_metric=accuracy_metric,
             notes=notes,
         )
-        self._log_repo.add("info", f"Model version registered: {name} v{version}")
+        self._log("info", f"Model version registered: {name} v{version}",
+                  action="register_model_version")
         return {"status": "success", "model_version": self._mv_to_dict(mv)}
 
     def list_model_versions(self, scene: str = None,

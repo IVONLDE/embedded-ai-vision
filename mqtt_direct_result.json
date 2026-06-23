@@ -1,0 +1,9 @@
+{
+  "count": 1,
+  "messages": [
+    {
+      "topic": "edge/rk3399pro-001/detections",
+      "data": "{\"device_id\":\"rk3399pro-edge-001\",\"frame_index\":7,\"timestamp_us\":233331,\"detections\":[{\"x1\":29,\"y1\":357,\"x2\":209,\"y2\":522,\"conf\":0.411249,\"class_id\":0,\"track_id\":1},{\"x1\":92,\"y1\":381,\"x2\":154,\"y2\":504,\"conf\":0.384626,\"class_id\":0,\"track_id\":2},{\"x1\":68,\"y1\":528,\"x2\":87,\"y2\":551,\"conf\":0.311418,\"clas"
+    }
+  ]
+}

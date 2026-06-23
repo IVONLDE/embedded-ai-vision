@@ -426,8 +426,9 @@ Rectangle {
                                     text: "删除"
                                     font.pixelSize: 11
                                     onClicked: {
-                                        backendService.unregisterEdgeDevice(model.device_id)
-                                        refreshDevices()
+                                        deleteConfirmDialog.targetDeviceId = model.device_id
+                                        deleteConfirmDialog.targetDeviceName = model.name || model.device_id
+                                        deleteConfirmDialog.open()
                                     }
                                 }
                             }
@@ -1091,6 +1092,56 @@ Rectangle {
                         otaStatusText.text = result.message || "推送中..."
                         otaStatusText.color = result.status === "success" ? root.successColor : root.textMuted
                         deployDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 删除确认对话框 ───────────────────────────────────
+    Dialog {
+        id: deleteConfirmDialog
+        title: "确认删除"
+        modal: true
+        anchors.centerIn: parent
+
+        property string targetDeviceId: ""
+        property string targetDeviceName: ""
+
+        ColumnLayout {
+            spacing: 12
+
+            Text {
+                text: "确定要删除设备 \"" + deleteConfirmDialog.targetDeviceName + "\" 吗？"
+                color: root.textColor
+                font.pixelSize: 14
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+
+            Text {
+                text: "此操作将永久删除设备记录，无法撤销。"
+                color: root.dangerColor
+                font.pixelSize: 12
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Button {
+                    text: "取消"
+                    onClicked: deleteConfirmDialog.close()
+                }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "确认删除"
+                    highlighted: true
+                    onClicked: {
+                        var result = backendService.unregisterEdgeDevice(deleteConfirmDialog.targetDeviceId)
+                        otaStatusText.text = result.message || (result.status === "success" ? "设备已删除" : "删除失败")
+                        otaStatusText.color = result.status === "success" ? root.successColor : root.dangerColor
+                        refreshDevices()
+                        deleteConfirmDialog.close()
+                        liveData.selectedDeviceId = ""
                     }
                 }
             }
