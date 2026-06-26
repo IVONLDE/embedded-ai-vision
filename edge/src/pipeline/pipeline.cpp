@@ -286,8 +286,17 @@ static void capture_thread_func(const PipelineConfig &cfg,
             frame.data = nullptr;
             if (!file_input.read_frame(&frame.data, &frame.width,
                                        &frame.height, &frame.timestamp_us)) {
+                /* 视频文件播放完毕，循环播放 */
                 if (frame.data) delete[] frame.data;
-                break;
+                printf("[Pipeline] Video file ended, restarting (frame_idx=%d)\n", frame_idx);
+                file_input.close();
+                if (!file_input.open(source_path)) {
+                    std::cerr << "[Pipeline] Failed to reopen input: " << source_path << std::endl;
+                    g_running.store(false);
+                    return;
+                }
+                frame_idx = 0;  /* 重置帧计数 */
+                continue;
             }
             frame_queue.push_or_wait(frame);
         }
