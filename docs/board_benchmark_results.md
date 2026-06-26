@@ -299,7 +299,109 @@ static int total_encoded = 0;
 
 ---
 
-## 测试总结
+## 实验 3：编码丢帧率测量
+
+### 测试目标
+验证描述："1080p@30fps 满帧编码无丢帧"
+
+### 测试状态
+
+| 状态 | 问题 |
+|------|------|
+| ⏳ 受阻 | Pipeline 服务 Watchdog timeout，需修复 |
+
+### 问题分析
+
+运行 `edge-ai-camera` systemd 服务时发现：
+- 服务每 30 秒触发 **Watchdog timeout** 被 systemd 杀掉
+- 配置文件使用 `video_file` 输入源（视频文件播完后 pipeline 卡住）
+- 服务配置 `WatchdogSec=30s` 要求应用定期调用 `sd_notify("WATCHDOG=1")`
+
+日志片段：
+```
+6月 26 18:43:09 edge-ai-camera[834]: [RKNN1] Model loaded successfully
+6月 26 18:43:39 systemd[1]: edge-ai-camera.service: Watchdog timeout (limit 30s)!
+6月 26 18:43:39 systemd[1]: edge-ai-camera.service: Killing process 834 with signal SIGABRT.
+```
+
+### 待解决
+- 修改 pipeline.cpp 在视频播完后正确退出或循环播放
+- 或修改配置使用摄像头输入（`type: v4l2_camera`）
+
+---
+
+## 实验 4：RTSP 推流延迟测量
+
+### 测试目标
+验证描述："推流延迟 < 200ms"
+
+### 测试状态
+
+| 状态 | 原因 |
+|------|------|
+| ⏳ 受阻 | 同实验 3，Pipeline 服务不稳定 |
+
+---
+
+## 实验 7：中断响应延迟 (cyclictest)
+
+### 测试目标
+验证描述："内核开启 PREEMPT 抢占，中断响应延迟降低约 30%"
+
+### 测试状态
+
+| 状态 | 原因 |
+|------|------|
+| ⏳ 受阻 | 需要 root 权限运行 cyclictest |
+
+### 测试方法说明
+
+#### 市面上常见做法
+1. **cyclictest**：测量实时调度延迟，对比不同内核配置
+2. **Xenomai 实时扩展**：硬实时基准对比
+3. **ACPI PET 分析**：内核自带性能分析
+
+#### 本项目计划采用的方法
+```bash
+# 需要 root 权限
+sudo cyclictest -l10000 -m -Sp90 -i200 -h400 -q
+```
+
+---
+
+## 测试总结（更新）
+
+### 已完成测试
+
+| 实验 | 指标 | 目标值 | 实测值 | 结果 |
+|------|------|--------|--------|------|
+| 1 | NPU 推理延迟 | < 40ms | 64.90ms | ❌ |
+| 2 | 推理抖动 (stddev) | < 5ms | 3.16ms | ✅ |
+| 5 | 启动时间 | < 5s | 21.04s | ❌ |
+| 6 | 镜像体积 | 缩减 30% | 待对比 | ⏳ |
+
+### 受阻测试
+
+| 实验 | 阻塞原因 |
+|------|----------|
+| 3 | Pipeline Watchdog timeout，需修复代码 |
+| 4 | 同上，依赖稳定 Pipeline |
+| 7 | 需要 root 权限 |
+| 8 | 需测试数据集 |
+
+### 问题发现（新增）
+
+1. **推理延迟超标**：64.9ms vs 目标 40ms
+2. **启动时间超标**：21s vs 目标 5s
+3. **Pipeline Watchdog 问题**：视频文件输入源导致服务不稳定
+4. **NPU 客户端限制**：`ACK_PERF_TOO_MANY_CLIENT` 错误，需要正确管理 NPU 连接
+
+### 下一步建议
+
+1. 修复 pipeline.cpp 在视频播完后的退出逻辑
+2. 用户手动运行 `sudo cyclictest` 收集延迟数据
+3. 在 PC 端拉流测试 RTSP 延迟（需先修复 Pipeline）
+4. 检查 NPU 频率配置以降低推理延迟
 
 ### 已完成测试
 
