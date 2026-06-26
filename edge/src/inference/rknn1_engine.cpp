@@ -425,11 +425,20 @@ int Rknn1Engine::inference(unsigned char *input_data)
     inputs[0].type = RKNN_TENSOR_UINT8;
     inputs[0].size = input_size;
     inputs[0].fmt = RKNN_TENSOR_NHWC;
-    inputs[0].buf = input_data;
+
+    /* OpenCV 读取的帧是 BGR 格式，需要转换为 RGB */
+    unsigned char *rgb_data = new unsigned char[input_size];
+    for (int i = 0; i < input_size; i += 3) {
+        rgb_data[i] = input_data[i + 2];     /* R <- B */
+        rgb_data[i + 1] = input_data[i + 1]; /* G <- G */
+        rgb_data[i + 2] = input_data[i];     /* B <- R */
+    }
+    inputs[0].buf = rgb_data;
 
     ret = rknn_inputs_set(_ctx, 1, inputs);
     if (ret < 0) {
         fprintf(stderr, "[RKNN1] rknn_inputs_set fail! ret=%d\n", ret);
+        delete[] rgb_data;
         return -1;
     }
 
@@ -467,6 +476,7 @@ int Rknn1Engine::inference(unsigned char *input_data)
     ret = rknn_outputs_get(_ctx, _n_output, outputs, NULL);
     if (ret < 0) {
         fprintf(stderr, "[RKNN1] rknn_outputs_get fail! ret=%d\n", ret);
+        delete[] rgb_data;
         return -1;
     }
 
@@ -485,6 +495,9 @@ int Rknn1Engine::inference(unsigned char *input_data)
 
     /* 释放输出 (RKNN1 必须手动释放) */
     rknn_outputs_release(_ctx, _n_output, outputs);
+
+    /* 释放 RGB 转换缓冲区 */
+    delete[] rgb_data;
 
     if (ret >= 0)
         return perf_run.run_duration;  /* 微秒 */
